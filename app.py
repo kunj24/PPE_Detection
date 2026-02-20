@@ -11,6 +11,14 @@ from streamlit_extras.colored_header import colored_header
 from streamlit_extras.metric_cards import style_metric_cards
 from streamlit_extras.stylable_container import stylable_container
 
+# Page configuration must come before any Streamlit command
+st.set_page_config(
+    page_title="AI CCTV Surveillance",
+    layout="wide",
+    page_icon="👷",
+    initial_sidebar_state="expanded"
+)
+
 # Load YOLOv8 model
 MODEL_PATH = "best.pt"
 if not os.path.exists(MODEL_PATH):
@@ -21,14 +29,6 @@ model = YOLO(MODEL_PATH)
 CLASS_NAMES = model.names
 
 LOG_FILE = "violation_logs.csv"
-
-# Set page config with improved styling
-st.set_page_config(
-    page_title="AI CCTV Surveillance",
-    layout="wide",
-    page_icon="👷",
-    initial_sidebar_state="expanded"
-)
 
 
 # Custom CSS for enhanced UI
