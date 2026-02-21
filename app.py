@@ -7,10 +7,6 @@ import time
 import pandas as pd
 from datetime import datetime
 import numpy as np  
-from streamlit_extras.colored_header import colored_header
-from streamlit_extras.metric_cards import style_metric_cards
-from streamlit_extras.stylable_container import stylable_container
-
 # Page configuration must come before any Streamlit command
 st.set_page_config(
     page_title="AI CCTV Surveillance",
@@ -18,6 +14,11 @@ st.set_page_config(
     page_icon="👷",
     initial_sidebar_state="expanded"
 )
+
+# Import Streamlit extras after page config to avoid early Streamlit calls
+from streamlit_extras.colored_header import colored_header
+from streamlit_extras.metric_cards import style_metric_cards
+from streamlit_extras.stylable_container import stylable_container
 
 # Load YOLOv8 model
 MODEL_PATH = "best.pt"
