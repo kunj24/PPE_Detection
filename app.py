@@ -31,49 +31,45 @@ CLASS_NAMES = model.names
 LOG_FILE = "violation_logs.csv"
 
 
-# Custom CSS for enhanced UI
-# Custom CSS for better visual clarity and usability
+# Custom CSS for enhanced UI — Dark theme
 st.markdown("""
     <style>
+        :root{
+            --bg: #0f1724;
+            --card: #0b1220;
+            --muted: #94a3b8;
+            --accent: #00bcd4;
+            --text: #e6eef8;
+            --danger: #ff6b6b;
+        }
+
         /* Global background and font settings */
         .main {
-            background-color: #f2f6fc !important;
-            color: #1f1f1f;
+            background-color: var(--bg) !important;
+            color: var(--text) !important;
             font-family: 'Segoe UI', sans-serif;
         }
 
         /* Streamlit widgets */
         .stButton>button {
-            background-color: #fa4b4b !important;
-            color: white !important;
-            border-radius: 6px;
+            background: linear-gradient(90deg, var(--accent), #0077b6) !important;
+            color: #02121a !important;
+            border-radius: 8px;
             padding: 10px 18px;
-            font-weight: 600;
+            font-weight: 700;
         }
 
         .stSelectbox, .stTextInput, .stRadio>div {
-            background-color: #ffffff !important;
-            color: #333333;
-            border-radius: 6px;
-            padding: 8px;
-        }
-
-        .stDataFrame {
-            border-radius: 6px;
-        }
-
-        .stAlert {
-            background-color: #fff3cd !important;
-            border-left: 4px solid #ffc107 !important;
-            color: #856404;
-        }
-
-        /* Metric cards container */
-        .css-1v3fvcr {
-            padding: 1rem;
+            background-color: var(--card) !important;
+            color: var(--text) !important;
             border-radius: 8px;
-            background-color: #ffffff;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            padding: 10px;
+            border: 1px solid rgba(255,255,255,0.04);
+        }
+
+        .stDataFrame, .css-1v3fvcr {
+            background-color: rgba(255,255,255,0.03) !important;
+            border-radius: 8px;
         }
 
         .css-1y4p8pa {
@@ -83,39 +79,32 @@ st.markdown("""
 
         /* Violation cards */
         .violation-card {
-            border-left: 5px solid #dc3545;
-            background-color: #fff5f5;
+            border-left: 5px solid var(--danger);
+            background-color: rgba(255,107,107,0.08);
             padding: 12px;
             margin-bottom: 12px;
             border-radius: 6px;
-            color: #721c24;
+            color: var(--text);
         }
 
         /* Sidebar styling */
         section[data-testid="stSidebar"] {
-            background-color: #e9f0f7 !important;
+            background-color: #071025 !important;
+            color: var(--text) !important;
         }
 
         /* Headers */
         h1, h2, h3, h4 {
-            color: #003366 !important;
+            color: var(--text) !important;
         }
 
         /* Info and warning colors */
-        .stInfo {
-            background-color: #d1ecf1 !important;
-            color: #0c5460 !important;
-        }
+        .stInfo { background-color: rgba(0,188,212,0.08) !important; color: var(--text) !important; }
+        .stWarning { background-color: rgba(255,193,7,0.06) !important; color: var(--text) !important; }
+        .stError { background-color: rgba(220,53,69,0.06) !important; color: var(--text) !important; }
 
-        .stWarning {
-            background-color: #fff3cd !important;
-            color: #856404 !important;
-        }
-
-        .stError {
-            background-color: #f8d7da !important;
-            color: #721c24 !important;
-        }
+        /* Small tweaks */
+        img { border-radius: 8px; }
     </style>
 """, unsafe_allow_html=True)
 
