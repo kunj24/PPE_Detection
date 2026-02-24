@@ -1,435 +1,448 @@
+# -*- coding: utf-8 -*-
+"""
+Professional PPE Detection System v2
+-------------------------------------
+Pages (sidebar radio):
+  1. Live Detection   - all 5 input sources, face-ID, smart 3-sec logging
+  2. Worker Register  - capture / upload photo -> SQLite + face encoding
+  3. Dashboard        - analytics, filters, CSV export
+  4. Violation Logs   - enhanced table with worker name / dept / severity
+"""
+
+# --- stdlib + third-party imports ---
 import streamlit as st
-import cv2
-import tempfile
-from ultralytics import YOLO
-import os
-import time
+import cv2, os, time, tempfile, shutil
+import numpy as np
 import pandas as pd
 from datetime import datetime
-import numpy as np  
-# Page configuration must come before any Streamlit command
+
+# --- Page config (MUST be first Streamlit call) ---
 st.set_page_config(
-    page_title="AI CCTV Surveillance",
+    page_title="AI PPE Surveillance",
     layout="wide",
     page_icon="👷",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# Import Streamlit extras after page config to avoid early Streamlit calls
-from streamlit_extras.colored_header import colored_header
-from streamlit_extras.metric_cards import style_metric_cards
-from streamlit_extras.stylable_container import stylable_container
+# --- Streamlit-extras (graceful if missing) ---
+try:
+    from streamlit_extras.colored_header import colored_header
+    from streamlit_extras.metric_cards import style_metric_cards
+    from streamlit_extras.stylable_container import stylable_container
+    _EXTRAS = True
+except ImportError:
+    _EXTRAS = False
 
-# Load YOLOv8 model
-MODEL_PATH = "best.pt"
-if not os.path.exists(MODEL_PATH):
-    st.error(f"❌ Model file not found at: {os.path.abspath(MODEL_PATH)}")
-    st.stop()
+# --- Project utilities ---
+from utils import database_utils as db
+from utils import face_utils
+from utils.detection_utils import PPEDetector
 
-model = YOLO(MODEL_PATH)
-CLASS_NAMES = model.names
-
-LOG_FILE = "violation_logs.csv"
+# --- Ensure DB tables exist ---
+db.init_database()
 
 
-# Custom CSS for enhanced UI — Dark theme
+# ═══════════════════════════════════════════════════════════════
+#  DARK‑THEME CSS  (same palette you already had)
+# ═══════════════════════════════════════════════════════════════
 st.markdown("""
-    <style>
-        :root{
-            --bg: #0f1724;
-            --card: #0b1220;
-            --muted: #94a3b8;
-            --accent: #00bcd4;
-            --text: #e6eef8;
-            --danger: #ff6b6b;
-        }
-
-        /* Global background and font settings */
-        .main {
-            background-color: var(--bg) !important;
-            color: var(--text) !important;
-            font-family: 'Segoe UI', sans-serif;
-        }
-
-        /* Streamlit widgets */
-        .stButton>button {
-            background: linear-gradient(90deg, var(--accent), #0077b6) !important;
-            color: #02121a !important;
-            border-radius: 8px;
-            padding: 10px 18px;
-            font-weight: 700;
-        }
-
-        .stSelectbox, .stTextInput, .stRadio>div {
-            background-color: var(--card) !important;
-            color: var(--text) !important;
-            border-radius: 8px;
-            padding: 10px;
-            border: 1px solid rgba(255,255,255,0.04);
-        }
-
-        .stDataFrame, .css-1v3fvcr {
-            background-color: rgba(255,255,255,0.03) !important;
-            border-radius: 8px;
-        }
-
-        .css-1y4p8pa {
-            padding-top: 2rem;
-            padding-bottom: 2rem;
-        }
-
-        /* Violation cards */
-        .violation-card {
-            border-left: 5px solid var(--danger);
-            background-color: rgba(255,107,107,0.08);
-            padding: 12px;
-            margin-bottom: 12px;
-            border-radius: 6px;
-            color: var(--text);
-        }
-
-        /* Sidebar styling */
-        section[data-testid="stSidebar"] {
-            background-color: #071025 !important;
-            color: var(--text) !important;
-        }
-
-        /* Headers */
-        h1, h2, h3, h4 {
-            color: var(--text) !important;
-        }
-
-        /* Info and warning colors */
-        .stInfo { background-color: rgba(0,188,212,0.08) !important; color: var(--text) !important; }
-        .stWarning { background-color: rgba(255,193,7,0.06) !important; color: var(--text) !important; }
-        .stError { background-color: rgba(220,53,69,0.06) !important; color: var(--text) !important; }
-
-        /* Small tweaks */
-        img { border-radius: 8px; }
-    </style>
+<style>
+:root{--bg:#0f1724;--card:#0b1220;--muted:#94a3b8;--accent:#00bcd4;
+      --text:#e6eef8;--danger:#ff6b6b;--success:#51cf66}
+.main{background:var(--bg)!important;color:var(--text)!important;
+      font-family:'Segoe UI',sans-serif}
+.stButton>button{background:linear-gradient(90deg,var(--accent),#0077b6)!important;
+      color:#02121a!important;border-radius:8px;padding:10px 18px;font-weight:700}
+.stSelectbox,.stTextInput,.stRadio>div{background:var(--card)!important;
+      color:var(--text)!important;border-radius:8px;padding:10px;
+      border:1px solid rgba(255,255,255,.04)}
+.stDataFrame{background:rgba(255,255,255,.03)!important;border-radius:8px}
+.violation-card{border-left:5px solid var(--danger);
+      background:rgba(255,107,107,.08);padding:12px;margin-bottom:12px;
+      border-radius:6px;color:var(--text)}
+section[data-testid="stSidebar"]{background:#071025!important;color:var(--text)!important}
+h1,h2,h3,h4{color:var(--text)!important}
+img{border-radius:8px}
+</style>
 """, unsafe_allow_html=True)
 
 
-# Main header with colored header
-colored_header(
-    label="👷 AI CCTV Surveillance System",
-    description="An AI-powered CCTV surveillance system for real-time detection of PPE compliance, including helmet and mask violations, using YOLO and computer vision.",
-    color_name="blue-70",
-)
-
-# Sidebar with improved layout
+# ═══════════════════════════════════════════════════════════════
+#  SIDEBAR – navigation + system info
+# ═══════════════════════════════════════════════════════════════
 with st.sidebar:
-    st.image("home.jpeg", use_container_width=True)
+    if os.path.exists("home.jpeg"):
+        st.image("home.jpeg", use_container_width=True)
+
     st.markdown("""
-    <div style="margin-top: 20px;">
-        <div style="
-            display: flex; 
-            align-items: center; 
-            gap: 10px; 
-            background-color: #003366; 
-            color: white; 
-            padding: 10px 16px; 
-            border-radius: 8px;
-            font-weight: bold;
-            font-size: 1.1rem;
-        ">
-            ⚙️ Configuration
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    <div style="margin-top:20px">
+      <div style="display:flex;align-items:center;gap:10px;background:#003366;
+           color:white;padding:10px 16px;border-radius:8px;font-weight:bold;
+           font-size:1.1rem">⚙️ Navigation</div>
+    </div>""", unsafe_allow_html=True)
+
+    PAGE = st.radio(
+        "Go to",
+        ["🎥 Live Detection", "👤 Worker Registration",
+         "📊 Dashboard", "📋 Violation Logs"],
+        label_visibility="collapsed",
+    )
+
+    st.markdown("---")
+    workers = db.get_all_workers()
+    stats_today = db.get_dashboard_stats()
+    c1, c2 = st.columns(2)
+    c1.metric("Workers", len(workers))
+    c2.metric("Violations today", stats_today["total"])
+
+    st.markdown("---")
+    st.caption("PPE Detection System v2 · SQLite backend")
+
+
+# ═══════════════════════════════════════════════════════════════
+#  PAGE 1 – LIVE DETECTION
+# ═══════════════════════════════════════════════════════════════
+def page_detection():
+    if _EXTRAS:
+        colored_header(label="👷 AI CCTV Surveillance System",
+                       description="Real‑time PPE compliance monitoring with worker identification",
+                       color_name="blue-70")
+    else:
+        st.title("👷 AI CCTV Surveillance System")
+
+    # Manual worker selection (when face_recognition not available)
+    workers = db.get_all_workers()
+    manual_worker = None
     
-    # Updated source options with browser webcam
+    if not face_utils.FACE_REC_AVAILABLE and workers:
+        st.info("ℹ️ Face recognition is disabled. Select worker manually below:")
+        wcols = st.columns([2, 1])
+        worker_opts = ["Unknown"] + [f"{w['employee_id']} - {w['name']} ({w['department']})" for w in workers]
+        selected = wcols[0].selectbox("👤 Current worker being monitored", worker_opts)
+        if selected != "Unknown":
+            emp_id = selected.split(" - ")[0]
+            manual_worker = next(w for w in workers if w["employee_id"] == emp_id)
+        wcols[1].markdown("<br>", unsafe_allow_html=True)
+        if wcols[1].button("🔄 Reload workers"):
+            st.rerun()
+    
+    # Settings expander
+    with st.expander("⚙️ Detection settings", expanded=False):
+        sc1, sc2, sc3 = st.columns(3)
+        do_faces = sc1.checkbox("Enable face recognition", value=True, 
+                                disabled=not face_utils.FACE_REC_AVAILABLE,
+                                help="Requires face_recognition library" if not face_utils.FACE_REC_AVAILABLE else None)
+        threshold = sc2.slider("Violation hold (sec)", 0.0, 10.0, 0.5, 0.1,
+                               help="Violations must persist this long before logging. Set to 0 for instant logging.")
+        cam_loc = sc3.text_input("Camera location", "Main Camera")
+
+    # Lazy‑init or update detector in session state
+    if "detector" not in st.session_state:
+        st.session_state.detector = PPEDetector(
+            threshold_secs=threshold, camera_location=cam_loc)
+    else:
+        # Update threshold and camera if changed
+        st.session_state.detector.threshold = threshold
+        st.session_state.detector.camera = cam_loc
+    
+    # Store manual worker selection in session state
+    st.session_state.manual_worker = manual_worker
+
+    det: PPEDetector = st.session_state.detector
+
     source_type = st.radio(
         "Select Input Source",
-        ['Browser Webcam (Photo)', 'Upload Video', 'Upload Image', 'RTSP IP Camera', 'OpenCV Webcam (Local Only)'],
-        index=0,
-        help="Choose the source for surveillance feed"
+        ["Browser Webcam (Photo)", "Upload Video", "Upload Image",
+         "RTSP IP Camera", "OpenCV Webcam (Local Only)"],
+        horizontal=True,
     )
-    
-    st.markdown("---")
-    st.markdown("### System Status")
-    status_col1, status_col2 = st.columns(2)
-    status_col1.metric("Model", "YOLOv8", "Active")
-    status_col2.metric("FPS", "30", "Live")
-    
-    st.markdown("---")
-    st.markdown("### About")
-    st.markdown("""
-    This AI surveillance system detects:
-    - PPE violations
-    - Safety breaches
-    - Unauthorized access
-    - Other anomalies
-    """)
 
-# Violation logger with enhanced functionality
-def log_violation(class_name, confidence):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    entry = pd.DataFrame([[timestamp, class_name, round(confidence, 2)]], 
-                        columns=["Timestamp", "Violation", "Confidence"])
-    
-    # Create file with headers if it doesn't exist
-    if not os.path.exists(LOG_FILE):
-        entry.to_csv(LOG_FILE, index=False)
-    else:
-        try:
-            # Read existing file to check format
-            existing = pd.read_csv(LOG_FILE)
-            if not all(col in existing.columns for col in ["Timestamp", "Violation", "Confidence"]):
-                # If columns don't match, recreate file
-                entry.to_csv(LOG_FILE, index=False)
-            else:
-                # Append without header
-                entry.to_csv(LOG_FILE, mode='a', header=False, index=False)
-        except:
-            # If file is corrupted, recreate it
-            entry.to_csv(LOG_FILE, index=False)
-    
-    # Display real-time alert for violation
-    with st.container():
-        st.markdown(f"""
-        <div class="violation-card">
-            <strong>⚠️ New Violation Detected</strong><br>
-            Type: {class_name}<br>
-            Confidence: {round(confidence, 2)}%<br>
-            Time: {timestamp}
-        </div>
-        """, unsafe_allow_html=True)
+    # ── Browser webcam photo ────────────────────────────────────
+    if source_type == "Browser Webcam (Photo)":
+        st.info("📸 Captures a single photo (browser permission required)")
+        img = st.camera_input("Take a photo for PPE detection")
+        if img:
+            frame = cv2.imdecode(
+                np.frombuffer(img.read(), np.uint8), cv2.IMREAD_COLOR)
+            annotated, stats = det.process_frame(frame, do_faces=do_faces)
+            c1, c2 = st.columns([2, 1])
+            c1.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
+                     caption="Detection result", use_container_width=True)
+            with c2:
+                st.metric("Detections", stats["detections"])
+                st.metric("Violations", stats["violations_in_frame"])
+                st.metric("Workers ID'd", stats["workers_identified"])
+                st.metric("Logged to DB", stats["violations_logged"])
+                if stats["violations_in_frame"] > 0 and stats["violations_logged"] == 0:
+                    st.warning(f"⏱️ {stats['pending_tracks']} violations pending (need {threshold:.1f}s hold time)")
 
-# Frame processor with additional metrics
-def process_frame(frame):
-    results = model(frame)[0]
-    annotated_frame = results.plot()
-    
-    # Calculate metrics
-    violation_count = 0
-    for box in results.boxes:
-        cls_id = int(box.cls[0])
-        class_name = CLASS_NAMES[cls_id]
-        confidence = float(box.conf[0])
-        if "NO" in class_name.upper():
-            log_violation(class_name, confidence)
-            violation_count += 1
-    
-    return annotated_frame, results, violation_count
+    # ── Upload video ────────────────────────────────────────────
+    elif source_type == "Upload Video":
+        f = st.file_uploader("Upload a video", type=["mp4", "avi", "mov"])
+        if f:
+            tmp = os.path.join(tempfile.gettempdir(), f.name)
+            with open(tmp, "wb") as fp:
+                fp.write(f.read())
+            st.success("✅ Video uploaded – processing …")
+            _stream_video(tmp, det, do_faces)
 
-# Enhanced stream handler with metrics display
-def display_video(video_source):
-    cap = cv2.VideoCapture(video_source)
-    st_frame = st.empty()
-    stop_button = st.button("🛑 Stop Stream")
-    st.error("OpenCV webcam only works when running locally!")
-    fail_count = 0
-    
-    # Create metrics row
-    metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
-    
-    while cap.isOpened():
-        if stop_button:
-            break
+    # ── Upload image ────────────────────────────────────────────
+    elif source_type == "Upload Image":
+        f = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
+        if f:
+            tmp = os.path.join(tempfile.gettempdir(), f.name)
+            with open(tmp, "wb") as fp:
+                fp.write(f.read())
+            frame = cv2.imread(tmp)
+            annotated, stats = det.process_frame(frame, do_faces=do_faces)
+            st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
+                     caption="PPE Detection", use_container_width=True)
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric("Detections", stats["detections"])
+            mc2.metric("Violations", stats["violations_in_frame"])
+            mc3.metric("Logged", stats["violations_logged"])
+            mc4.metric("Pending", stats["pending_tracks"])
+            if stats["violations_in_frame"] > 0 and stats["violations_logged"] == 0:
+                st.warning(f"⏱️ Violations detected but not logged yet. Set threshold to 0s for instant logging, or keep violations in view for {threshold:.1f}+ seconds.")
 
-        ret, frame = cap.read()
-        if not ret:
-            fail_count += 1
-            if fail_count > 10:
-                st.warning("⚠️ Stream lost or ended.")
-                break
-            continue
-        fail_count = 0
+    # ── RTSP ────────────────────────────────────────────────────
+    elif source_type == "RTSP IP Camera":
+        url = st.text_input("RTSP URL",
+                            placeholder="rtsp://user:pass@192.168.1.100:554/stream1")
+        if url and st.button("📡 Start stream", type="primary"):
+            _stream_video(url, det, do_faces)
 
-        start_time = time.time()
-        annotated_frame, results, violation_count = process_frame(frame)
-        processing_time = time.time() - start_time
-        
-        # Update metrics
-        with metrics_col1:
-            st.metric("Processing Time", f"{processing_time*1000:.1f} ms")
-        with metrics_col2:
-            st.metric("Objects Detected", len(results.boxes))
-        with metrics_col3:
-            st.metric("Violations", violation_count, delta_color="inverse")
-        
-        # Style the metric cards (updated parameters)
-        style_metric_cards(
-            background_color="#f8f9fa",
-            border_left_color="#0068c9",
-            box_shadow="0 2px 8px rgba(0,0,0,0.1)"
-        )
-        
-        # Display frame
-        st_frame.image(cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB), 
-                      channels="RGB", use_container_width=True)
-        time.sleep(0.03)
+    # ── Local OpenCV webcam ─────────────────────────────────────
+    elif source_type == "OpenCV Webcam (Local Only)":
+        st.warning("⚠️ Only works when running Streamlit locally")
+        if st.button("🎥 Start Webcam"):
+            _stream_video(0, det, do_faces)
 
+
+def _stream_video(source, det: PPEDetector, do_faces: bool):
+    """Shared helper – streams *source* frame‑by‑frame."""
+    cap = cv2.VideoCapture(source)
+    if not cap.isOpened():
+        st.error("❌ Cannot open video source"); return
+
+    frame_ph = st.empty()
+    stat_ph  = st.empty()
+    stop     = st.button("🛑 Stop Stream")
+    n, t0    = 0, time.time()
+
+    while cap.isOpened() and not stop:
+        ok, frame = cap.read()
+        if not ok:
+            st.warning("⚠️ Stream ended."); break
+        annotated, stats = det.process_frame(frame, do_faces=do_faces)
+        frame_ph.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
+                       channels="RGB", use_container_width=True)
+        n += 1
+        fps = n / max(time.time() - t0, 0.001)
+        with stat_ph.container():
+            a, b, c, d, e, f = st.columns(6)
+            a.metric("FPS", f"{fps:.1f}")
+            b.metric("Detections", stats["detections"])
+            c.metric("Violations", stats["violations_in_frame"])
+            d.metric("Workers", stats["workers_identified"])
+            e.metric("Logged", stats["violations_logged"])
+            f.metric("Pending", stats["pending_tracks"])
+        time.sleep(0.01)
     cap.release()
 
-# Enhanced image handler
-def process_image(image_path):
-    frame = cv2.imread(image_path)
-    start_time = time.time()
-    annotated_frame, results, violation_count = process_frame(frame)
-    processing_time = time.time() - start_time
-    
-    # Display metrics
-    col1, col2 = st.columns(2)
-    col1.metric("Processing Time", f"{processing_time*1000:.1f} ms")
-    col2.metric("Violations Detected", violation_count)
-    
-    return annotated_frame
 
-# Main content area with improved layout
-tab1, tab2 = st.tabs(["Live Monitoring", "Violation Logs"])
-
-with tab1:
-    # Browser Webcam Option
-    if source_type == 'Browser Webcam (Photo)':
-        st.info("ℹ️ Captures single photos (browser permission required)")
-        
-        captured_image = st.camera_input("Take a photo for PPE detection")
-        
-        if captured_image:
-            # Convert to OpenCV format
-            file_bytes = np.asarray(bytearray(captured_image.read()), dtype=np.uint8)
-            frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-            
-            # Process the image
-            annotated_frame, results, violation_count = process_frame(frame)
-            
-            # Display results
-            col1, col2 = st.columns(2)
-            with col1:
-                st.image(cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB),
-                        caption="Processed Image",
-                        use_container_width=True)
-            with col2:
-                st.metric("Processing Time", "N/A (single image)")
-                st.metric("Violations Detected", violation_count)
-
-    elif source_type == 'Upload Video':
-        with stylable_container(
-            key="upload_container",
-            css_styles="""
-                {
-                    border: 1px solid rgba(49, 51, 63, 0.2);
-                    border-radius: 8px;
-                    padding: 20px;
-                    margin-bottom: 20px;
-                }
-            """
-        ):
-            uploaded_file = st.file_uploader("Upload a video file", type=["mp4", "avi", "mov"])
-            if uploaded_file:
-                temp_video_path = os.path.join(tempfile.gettempdir(), uploaded_file.name)
-                with open(temp_video_path, 'wb') as f:
-                    f.write(uploaded_file.read())
-                st.success("✅ Video uploaded successfully. Processing...")
-                display_video(temp_video_path)
-
-    elif source_type == 'OpenCV Webcam (Local Only)':
-        if os.environ.get('IS_STREAMLIT_CLOUD'):
-            st.error("OpenCV webcam only works when running locally!")
-            st.info("Tip: Use 'Browser Webcam' for photo capture in the cloud")
-        else:
-            st.warning("""
-            🌐 Webcam access is disabled in cloud deployments. 
-            Try these instead:
-            - 📁 Upload a video file
-            - 📡 Use RTSP stream
-            - 💻 Run locally for webcam
-            """)
-            if st.button("🎥 Start Webcam"):
-                display_video(0)
-
-    elif source_type == 'Upload Image':
-        with stylable_container(
-            key="image_container",
-            css_styles="""
-                {
-                    border: 1px solid rgba(49, 51, 63, 0.2);
-                    border-radius: 8px;
-                    padding: 20px;
-                    margin-bottom: 20px;
-                }
-            """
-        ):
-            uploaded_image = st.file_uploader("Upload an image file", type=["jpg", "jpeg", "png"])
-            if uploaded_image:
-                temp_image_path = os.path.join(tempfile.gettempdir(), uploaded_image.name)
-                with open(temp_image_path, 'wb') as f:
-                    f.write(uploaded_image.read())
-                st.success("✅ Image uploaded successfully. Processing...")
-                annotated_image = process_image(temp_image_path)
-                st.image(cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB), 
-                        caption="Processed Image with PPE Detection", 
-                        use_container_width=True)
-
-    elif source_type == 'RTSP IP Camera':
-        with stylable_container(
-            key="rtsp_container",
-            css_styles="""
-                {
-                    border: 1px solid rgba(49, 51, 63, 0.2);
-                    border-radius: 8px;
-                    padding: 20px;
-                    margin-bottom: 20px;
-                }
-            """
-        ):
-            rtsp_url = st.text_input(
-                "Enter RTSP Stream URL",
-                placeholder="rtsp://username:password@192.168.1.100:554/stream1",
-                help="Enter the RTSP URL of your IP camera"
-            )
-            if rtsp_url:
-                if st.button("📡 Start RTSP Stream", type="primary"):
-                    try:
-                        display_video(rtsp_url)
-                    except Exception as e:
-                        st.error(f"❌ Unable to open RTSP stream: {e}")
-
-with tab2:
-    # Enhanced violation log viewer
-    st.markdown("### 📄 Recent Violation Logs")
-    if os.path.exists(LOG_FILE):
-        try:
-            df_logs = pd.read_csv(LOG_FILE)
-            if not df_logs.empty:
-                # Ensure required columns exist
-                if all(col in df_logs.columns for col in ["Timestamp", "Violation", "Confidence"]):
-                    st.dataframe(
-                        df_logs.tail(10).sort_values("Timestamp", ascending=False),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    
-                    # Add download and clear buttons
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.download_button(
-                            "📥 Download Full Log", 
-                            data=df_logs.to_csv(index=False), 
-                            file_name="violation_logs.csv", 
-                            mime="text/csv"
-                        )
-                    with col2:
-                        if st.button("🗑️ Clear Logs", type="secondary"):
-                            if os.path.exists(LOG_FILE):
-                                os.remove(LOG_FILE)
-                                st.success("Logs cleared successfully!")
-                                st.rerun()
-                    
-                    # Show violation statistics
-                    st.markdown("### 📊 Violation Statistics")
-                    violations_by_type = df_logs["Violation"].value_counts()
-                    st.bar_chart(violations_by_type)
-                else:
-                    st.warning("Log file format is incorrect - recreating it")
-                    os.remove(LOG_FILE)
-                    # Create new empty log file with correct format
-                    pd.DataFrame(columns=["Timestamp", "Violation", "Confidence"]).to_csv(LOG_FILE, index=False)
-        except Exception as e:
-            st.error(f"Error reading log file: {str(e)}")
-            # Attempt to recreate the log file
-            pd.DataFrame(columns=["Timestamp", "Violation", "Confidence"]).to_csv(LOG_FILE, index=False)
+# ═══════════════════════════════════════════════════════════════
+#  PAGE 2 – WORKER REGISTRATION
+# ═══════════════════════════════════════════════════════════════
+def page_register():
+    if _EXTRAS:
+        colored_header(label="👤 Worker Registration",
+                       description="Register workers with a photo so the system can identify them automatically",
+                       color_name="green-70")
     else:
-        st.info("ℹ️ No violations logged yet.")
+        st.title("👤 Worker Registration")
+
+    tab_new, tab_list = st.tabs(["➕ Register new worker", "📋 All workers"])
+
+    # ── register ────────────────────────────────────────────────
+    with tab_new:
+        rc1, rc2 = st.columns(2)
+        emp_id = rc1.text_input("Employee ID *", placeholder="EMP001")
+        name   = rc1.text_input("Full Name *",   placeholder="Ravi Kumar")
+        dept   = rc2.text_input("Department *",   placeholder="Construction")
+
+        st.markdown("#### 📸 Capture or upload a photo")
+        if not face_utils.FACE_REC_AVAILABLE:
+            st.warning(face_utils._UNAVAILABLE_MSG)
+
+        method = st.radio("Photo method", ["Camera", "Upload file"], horizontal=True)
+        photo_path: str | None = None
+
+        if method == "Camera":
+            cam = st.camera_input("Take a photo")
+            if cam:
+                arr = cv2.imdecode(np.frombuffer(cam.read(), np.uint8), cv2.IMREAD_COLOR)
+                photo_path = os.path.join(tempfile.gettempdir(), f"reg_{emp_id}.jpg")
+                cv2.imwrite(photo_path, arr)
+        else:
+            up = st.file_uploader("Upload photo", type=["jpg", "jpeg", "png"])
+            if up:
+                photo_path = os.path.join(tempfile.gettempdir(), up.name)
+                with open(photo_path, "wb") as fp:
+                    fp.write(up.read())
+
+        if st.button("✅ Register Worker", type="primary"):
+            if not (emp_id and name and dept):
+                st.error("Please fill all required fields."); return
+            if not photo_path:
+                st.error("Please provide a photo."); return
+
+            with st.spinner("Processing …"):
+                # Try to generate face encoding (None if lib missing)
+                enc_blob, enc_msg = face_utils.generate_encoding_from_file(photo_path)
+                if enc_blob is None and face_utils.FACE_REC_AVAILABLE:
+                    st.error(enc_msg); return
+
+                # Permanent copy of the photo
+                perm = os.path.join("database", "workers",
+                                    f"{emp_id}_{datetime.now():%Y%m%d_%H%M%S}.jpg")
+                shutil.copy(photo_path, perm)
+
+                ok, msg = db.add_worker(emp_id, name, dept, perm, enc_blob)
+                if ok:
+                    st.success(msg)
+                    st.balloons()
+                    # Refresh detector cache if it exists
+                    if "detector" in st.session_state:
+                        st.session_state.detector.reload_faces()
+                else:
+                    st.error(msg)
+
+    # ── list ────────────────────────────────────────────────────
+    with tab_list:
+        wk = db.get_all_workers()
+        if not wk:
+            st.info("No workers registered yet."); return
+        df = pd.DataFrame(wk)[["employee_id", "name", "department", "created_at"]]
+        df.columns = ["Employee ID", "Name", "Department", "Registered"]
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+        sel = st.selectbox("View details",
+                           [w["employee_id"] for w in wk],
+                           format_func=lambda x: f'{x} – {next(w["name"] for w in wk if w["employee_id"]==x)}')
+        w = next(w for w in wk if w["employee_id"] == sel)
+        ic1, ic2 = st.columns([1, 2])
+        with ic1:
+            if w["image_path"] and os.path.exists(w["image_path"]):
+                st.image(w["image_path"], caption=w["name"], use_container_width=True)
+            else:
+                st.warning("Photo not found on disk")
+        with ic2:
+            st.markdown(f"**ID:** {w['employee_id']}")
+            st.markdown(f"**Name:** {w['name']}")
+            st.markdown(f"**Dept:** {w['department']}")
+            st.markdown(f"**Since:** {w['created_at']}")
+
+
+# ═══════════════════════════════════════════════════════════════
+#  PAGE 3 – DASHBOARD
+# ═══════════════════════════════════════════════════════════════
+def page_dashboard():
+    if _EXTRAS:
+        colored_header(label="📊 Analytics Dashboard",
+                       description="Violation trends, department breakdown, severity distribution",
+                       color_name="violet-70")
+    else:
+        st.title("📊 Analytics Dashboard")
+
+    dc1, dc2 = st.columns([2, 1])
+    chosen = dc1.date_input("Filter date", value=datetime.now())
+    date_str = chosen.strftime("%Y-%m-%d")
+    dc2.write("")  # spacer
+    if dc2.button("🔄 Refresh"):
+        st.rerun()
+
+    s = db.get_dashboard_stats(date_str)
+
+    # key metrics row
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total violations", s["total"])
+    m2.metric("🔴 High severity", s["by_severity"].get("High", 0))
+    m3.metric("Unique violators", len(s["by_employee"]))
+    m4.metric("Departments hit", len(s["by_dept"]))
+
+    st.markdown("---")
+    gc1, gc2 = st.columns(2)
+
+    with gc1:
+        st.markdown("#### 👥 Top violators")
+        if s["by_employee"]:
+            df_e = pd.DataFrame(s["by_employee"], columns=["Name", "Count"])
+            st.bar_chart(df_e.set_index("Name"))
+        else:
+            st.info("None")
+    with gc2:
+        st.markdown("#### 🏢 By department")
+        if s["by_dept"]:
+            df_d = pd.DataFrame(s["by_dept"], columns=["Dept", "Count"])
+            st.bar_chart(df_d.set_index("Dept"))
+        else:
+            st.info("None")
+
+    st.markdown("#### ⚠️ Violation types")
+    if s["by_type"]:
+        st.dataframe(pd.DataFrame(s["by_type"], columns=["Type", "Count"]),
+                     use_container_width=True, hide_index=True)
+
+    st.markdown("#### 🚨 Severity split")
+    sv1, sv2, sv3 = st.columns(3)
+    sv1.metric("🟢 Low",    s["by_severity"].get("Low", 0))
+    sv2.metric("🟡 Medium", s["by_severity"].get("Medium", 0))
+    sv3.metric("🔴 High",   s["by_severity"].get("High", 0))
+
+
+# ═══════════════════════════════════════════════════════════════
+#  PAGE 4 – VIOLATION LOGS (enhanced table)
+# ═══════════════════════════════════════════════════════════════
+def page_logs():
+    if _EXTRAS:
+        colored_header(label="📋 Violation Logs",
+                       description="Full log with worker name, department, severity and snapshot",
+                       color_name="red-70")
+    else:
+        st.title("📋 Violation Logs")
+
+    lc1, lc2 = st.columns(2)
+    d1 = lc1.date_input("From", value=datetime.now())
+    d2 = lc2.date_input("To",   value=datetime.now())
+
+    df = db.get_violations_df(start_date=d1, end_date=d2)
+
+    if df.empty:
+        st.info("No violations in the selected range."); return
+
+    # Display nice table
+    show_cols = ["timestamp", "employee_id", "name", "department",
+                 "violation_type", "confidence", "severity_level", "status"]
+    show = df[[c for c in show_cols if c in df.columns]].copy()
+    show.columns = ["Time", "Emp ID", "Name", "Dept",
+                    "Violation", "Confidence", "Severity", "Status"][:len(show.columns)]
+
+    st.dataframe(show, use_container_width=True, hide_index=True)
+
+    bc1, bc2 = st.columns(2)
+    bc1.download_button(
+        "📥 Download CSV", data=df.to_csv(index=False),
+        file_name=f"violations_{d1}_{d2}.csv", mime="text/csv")
+
+    st.markdown("### 📊 Violation Statistics")
+    st.bar_chart(df["violation_type"].value_counts())
+
+
+# ═══════════════════════════════════════════════════════════════
+#  ROUTER
+# ═══════════════════════════════════════════════════════════════
+if   PAGE == "🎥 Live Detection":       page_detection()
+elif PAGE == "👤 Worker Registration":   page_register()
+elif PAGE == "📊 Dashboard":             page_dashboard()
+elif PAGE == "📋 Violation Logs":        page_logs()
