@@ -12,3 +12,7 @@ matplotlib
 scikit-learn
 requests
 
+# Optional – install for face recognition (needs CMake + C++ compiler)
+# dlib
+# face-recognition
+
