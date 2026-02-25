@@ -84,7 +84,7 @@ with st.sidebar:
     PAGE = st.radio(
         "Go to",
         ["🎥 Live Detection", "👤 Worker Registration",
-         "📊 Dashboard", "📋 Violation Logs"],
+         "📊 Dashboard", "📋 Violation Logs", "🗄️ Database Viewer"],
         label_visibility="collapsed",
     )
 
@@ -110,31 +110,25 @@ def page_detection():
     else:
         st.title("👷 AI CCTV Surveillance System")
 
-    # Manual worker selection (when face_recognition not available)
-    workers = db.get_all_workers()
-    manual_worker = None
-    
-    if not face_utils.FACE_REC_AVAILABLE and workers:
-        st.info("ℹ️ Face recognition is disabled. Select worker manually below:")
-        wcols = st.columns([2, 1])
-        worker_opts = ["Unknown"] + [f"{w['employee_id']} - {w['name']} ({w['department']})" for w in workers]
-        selected = wcols[0].selectbox("👤 Current worker being monitored", worker_opts)
-        if selected != "Unknown":
-            emp_id = selected.split(" - ")[0]
-            manual_worker = next(w for w in workers if w["employee_id"] == emp_id)
-        wcols[1].markdown("<br>", unsafe_allow_html=True)
-        if wcols[1].button("🔄 Reload workers"):
-            st.rerun()
-    
     # Settings expander
-    with st.expander("⚙️ Detection settings", expanded=False):
+    with st.expander("⚙️ Detection settings", expanded=True):
         sc1, sc2, sc3 = st.columns(3)
-        do_faces = sc1.checkbox("Enable face recognition", value=True, 
-                                disabled=not face_utils.FACE_REC_AVAILABLE,
-                                help="Requires face_recognition library" if not face_utils.FACE_REC_AVAILABLE else None)
+        do_faces = sc1.checkbox("Enable face recognition", value=True)
         threshold = sc2.slider("Violation hold (sec)", 0.0, 10.0, 0.5, 0.1,
                                help="Violations must persist this long before logging. Set to 0 for instant logging.")
         cam_loc = sc3.text_input("Camera location", "Main Camera")
+
+    # Auto face detection info
+    all_workers = db.get_all_workers()
+    known_faces = db.get_worker_face_encodings()  # {eid: (name, dept, encoding)}
+
+    if not all_workers:
+        st.warning("No workers registered yet. Go to **Worker Registration** to add workers first. Violations will be logged as 'Unknown'.")
+    elif not known_faces:
+        st.info(f"{len(all_workers)} worker(s) registered but none have face encodings. Re-register with a clear face photo for auto-detection.")
+    else:
+        names = [v[0] for v in known_faces.values()]
+        st.success(f"Auto Face Detection active: {len(known_faces)} worker(s) with face data ({', '.join(names)}). Faces will be matched automatically.")
 
     # Lazy‑init or update detector in session state
     if "detector" not in st.session_state:
@@ -144,9 +138,6 @@ def page_detection():
         # Update threshold and camera if changed
         st.session_state.detector.threshold = threshold
         st.session_state.detector.camera = cam_loc
-    
-    # Store manual worker selection in session state
-    st.session_state.manual_worker = manual_worker
 
     det: PPEDetector = st.session_state.detector
 
@@ -220,20 +211,20 @@ def page_detection():
 
 
 def _stream_video(source, det: PPEDetector, do_faces: bool):
-    """Shared helper – streams *source* frame‑by‑frame."""
+    """Shared helper - streams source frame-by-frame."""
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
-        st.error("❌ Cannot open video source"); return
+        st.error("Cannot open video source"); return
 
     frame_ph = st.empty()
     stat_ph  = st.empty()
-    stop     = st.button("🛑 Stop Stream")
+    stop     = st.button("Stop Stream")
     n, t0    = 0, time.time()
 
     while cap.isOpened() and not stop:
         ok, frame = cap.read()
         if not ok:
-            st.warning("⚠️ Stream ended."); break
+            st.warning("Stream ended."); break
         annotated, stats = det.process_frame(frame, do_faces=do_faces)
         frame_ph.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
                        channels="RGB", use_container_width=True)
@@ -272,8 +263,6 @@ def page_register():
         dept   = rc2.text_input("Department *",   placeholder="Construction")
 
         st.markdown("#### 📸 Capture or upload a photo")
-        if not face_utils.FACE_REC_AVAILABLE:
-            st.warning(face_utils._UNAVAILABLE_MSG)
 
         method = st.radio("Photo method", ["Camera", "Upload file"], horizontal=True)
         photo_path: str | None = None
@@ -440,9 +429,214 @@ def page_logs():
 
 
 # ═══════════════════════════════════════════════════════════════
+#  PAGE 5 – DATABASE VIEWER
+# ═══════════════════════════════════════════════════════════════
+def page_database():
+    if _EXTRAS:
+        colored_header(label="🗄️ Database Viewer",
+                       description="View all database tables and entries (like MongoDB Compass)",
+                       color_name="orange-70")
+    else:
+        st.title("🗄️ Database Viewer")
+
+    st.info("💡 **Live view of your SQLite database** - all data is stored in `database.db`")
+
+    # Tab selector for tables
+    tab1, tab2, tab3 = st.tabs(["👥 Workers Table", "⚠️ Violations Table", "📊 Database Stats"])
+
+    import sqlite3
+
+    # --- WORKERS TABLE ---
+    with tab1:
+        st.markdown("### 👥 Workers Table")
+        workers = db.get_all_workers()
+        
+        if not workers:
+            st.warning("No workers registered yet. Go to Worker Registration to add one.")
+        else:
+            # Convert to DataFrame and display
+            df = pd.DataFrame(workers)
+            display_cols = [c for c in df.columns if c not in ('face_encoding',)]
+            
+            st.markdown(f"**Total entries:** {len(df)}")
+            st.dataframe(
+                df[display_cols],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "image_path": st.column_config.TextColumn("Photo Path", width="medium"),
+                    "employee_id": st.column_config.TextColumn("Employee ID", width="small"),
+                }
+            )
+            
+            # Download option
+            csv = df[display_cols].to_csv(index=False)
+            st.download_button("📥 Download Workers CSV", csv, "workers.csv", "text/csv")
+            
+            # Show a sample worker photo
+            st.markdown("---")
+            st.markdown("#### 📸 Preview Worker Photos")
+            sel = st.selectbox("Select worker to preview", [w["employee_id"] for w in workers])
+            worker = next(w for w in workers if w["employee_id"] == sel)
+            
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                if worker.get("image_path") and os.path.exists(worker["image_path"]):
+                    st.image(worker["image_path"], caption=worker["name"])
+                else:
+                    st.warning("Photo not found")
+            with c2:
+                st.json({
+                    "employee_id": worker["employee_id"],
+                    "name": worker["name"],
+                    "department": worker["department"],
+                    "registered": worker["created_at"],
+                })
+
+    # --- VIOLATIONS TABLE ---
+    with tab2:
+        st.markdown("### ⚠️ Violation Logs Table")
+        
+        # Filters
+        fc1, fc2, fc3 = st.columns(3)
+        limit = fc1.number_input("Show last N rows", 10, 1000, 50, 10)
+        sort_order = fc2.selectbox("Sort by", ["Newest first", "Oldest first"])
+        filter_type = fc3.selectbox("Filter by type", ["All"] + ["NO-Mask", "NO-Hardhat", "NO-Safety Vest"])
+        
+        # Query violations
+        conn = sqlite3.connect("database.db")
+        
+        query = "SELECT * FROM violation_logs"
+        if filter_type != "All":
+            query += f" WHERE violation_type = '{filter_type}'"
+        query += " ORDER BY timestamp " + ("DESC" if sort_order == "Newest first" else "ASC")
+        query += f" LIMIT {limit}"
+        
+        df_viol = pd.read_sql_query(query, conn)
+        conn.close()
+        
+        if df_viol.empty:
+            st.warning("No violations found matching your filters.")
+        else:
+            # Count all violations (not just today)
+            conn2 = sqlite3.connect("database.db")
+            total_all = conn2.execute("SELECT COUNT(*) FROM violation_logs").fetchone()[0]
+            conn2.close()
+            st.markdown(f"**Showing:** {len(df_viol)} entries (of {total_all} total violations)")
+            
+            st.dataframe(
+                df_viol,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "timestamp": st.column_config.DatetimeColumn("Time", format="DD/MM/YYYY HH:mm:ss"),
+                    "confidence": st.column_config.NumberColumn("Conf", format="%.2f"),
+                    "image_snapshot_path": st.column_config.TextColumn("Snapshot", width="medium")
+                }
+            )
+            
+            # Download
+            st.download_button(
+                "📥 Download Filtered CSV",
+                df_viol.to_csv(index=False),
+                f"violations_filtered_{datetime.now():%Y%m%d_%H%M%S}.csv",
+                "text/csv"
+            )
+            
+            # Preview violation snapshot
+            if len(df_viol) > 0:
+                st.markdown("---")
+                st.markdown("#### 📸 Preview Violation Snapshots")
+                row_idx = st.slider("Select row to preview", 0, len(df_viol)-1, 0)
+                selected_row = df_viol.iloc[row_idx]
+                
+                c1, c2 = st.columns([1, 2])
+                with c1:
+                    snap_path = selected_row["image_snapshot_path"]
+                    if os.path.exists(snap_path):
+                        st.image(snap_path, caption=f"Violation #{selected_row['id']}")
+                    else:
+                        st.warning("Snapshot not found")
+                with c2:
+                    st.json(selected_row.to_dict())
+
+    # --- DATABASE STATS ---
+    with tab3:
+        st.markdown("### 📊 Database Statistics & Schema")
+        
+        # Connection info
+        st.markdown("#### 📁 File Information")
+        db_path = os.path.abspath("database.db")
+        db_size = os.path.getsize("database.db") if os.path.exists("database.db") else 0
+        
+        ic1, ic2 = st.columns(2)
+        ic1.metric("Database File", "database.db")
+        ic2.metric("File Size", f"{db_size / 1024:.1f} KB")
+        st.code(db_path, language="")
+        
+        # Table schemas
+        st.markdown("---")
+        st.markdown("#### 📋 Table Schemas")
+        
+        conn = sqlite3.connect("database.db")
+        cur = conn.cursor()
+        
+        # Workers schema
+        st.markdown("**`workers` table:**")
+        cur.execute("PRAGMA table_info(workers)")
+        workers_schema = pd.DataFrame(cur.fetchall(), columns=["cid", "name", "type", "notnull", "dflt_value", "pk"])
+        st.dataframe(workers_schema[["name", "type", "notnull", "pk"]], hide_index=True, use_container_width=True)
+        
+        # Violations schema
+        st.markdown("**`violation_logs` table:**")
+        cur.execute("PRAGMA table_info(violation_logs)")
+        viol_schema = pd.DataFrame(cur.fetchall(), columns=["cid", "name", "type", "notnull", "dflt_value", "pk"])
+        st.dataframe(viol_schema[["name", "type", "notnull", "pk"]], hide_index=True, use_container_width=True)
+        
+        conn.close()
+        
+        # Record counts
+        st.markdown("---")
+        st.markdown("#### 📊 Record Counts")
+        wc1, wc2 = st.columns(2)
+        wc1.metric("👥 Total Workers", len(db.get_all_workers()))
+        wc2.metric("⚠️ Total Violations", db.get_dashboard_stats()["total"])
+        
+        # Quick SQL query executor
+        st.markdown("---")
+        st.markdown("#### 💻 Run Custom SQL Query")
+        st.warning("⚠️ Use SELECT queries only to avoid data corruption")
+        
+        query_input = st.text_area(
+            "SQL Query",
+            "SELECT * FROM violation_logs ORDER BY timestamp DESC LIMIT 10;",
+            height=100
+        )
+        
+        if st.button("▶️ Execute Query", type="primary"):
+            try:
+                conn = sqlite3.connect("database.db")
+                result = pd.read_sql_query(query_input, conn)
+                conn.close()
+                st.success(f"✅ Query returned {len(result)} rows")
+                st.dataframe(result, use_container_width=True)
+                
+                # Download query result
+                st.download_button(
+                    "📥 Download Query Result",
+                    result.to_csv(index=False),
+                    "query_result.csv",
+                    "text/csv"
+                )
+            except Exception as e:
+                st.error(f"❌ Query failed: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════
 #  ROUTER
 # ═══════════════════════════════════════════════════════════════
 if   PAGE == "🎥 Live Detection":       page_detection()
 elif PAGE == "👤 Worker Registration":   page_register()
 elif PAGE == "📊 Dashboard":             page_dashboard()
 elif PAGE == "📋 Violation Logs":        page_logs()
+elif PAGE == "🗄️ Database Viewer":      page_database()
