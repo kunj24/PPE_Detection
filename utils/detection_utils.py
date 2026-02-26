@@ -10,6 +10,7 @@ import os
 import time
 import cv2
 import numpy as np
+import torch
 from datetime import datetime
 from typing import Dict, List, Tuple
 from ultralytics import YOLO
@@ -41,6 +42,65 @@ class PPEDetector:
     def reload_faces(self):
         self._known_faces = database_utils.get_worker_face_encodings()
 
+    # ── duplicate-person suppression ────────────────────────────
+    def _suppress_duplicate_persons(self, results):
+        """
+        When YOLO fires multiple 'Person' boxes for the same person
+        (e.g. one wide background box + one tighter body box), NMS
+        won't catch them because their IoU is low.  Instead we check
+        *center containment*: if the centre of box A lies inside box B
+        (or vice-versa), they describe the same person – discard the
+        lower-confidence one.
+        """
+        boxes = results.boxes
+        if boxes is None or len(boxes) <= 1:
+            return results
+
+        # Find the numeric id for class 'person'
+        person_cls_id = next(
+            (k for k, v in self.class_names.items()
+             if v.lower() == "person"), None
+        )
+        if person_cls_id is None:
+            return results
+
+        xyxy   = boxes.xyxy.cpu().numpy()          # (N, 4)  x1 y1 x2 y2
+        confs  = boxes.conf.cpu().numpy()           # (N,)
+        cls_ids = boxes.cls.cpu().numpy().astype(int)  # (N,)
+
+        person_idx = [i for i, c in enumerate(cls_ids) if c == person_cls_id]
+        if len(person_idx) <= 1:
+            return results
+
+        to_remove: set = set()
+        for a in range(len(person_idx)):
+            for b in range(a + 1, len(person_idx)):
+                ia, ib = person_idx[a], person_idx[b]
+                x1a, y1a, x2a, y2a = xyxy[ia]
+                x1b, y1b, x2b, y2b = xyxy[ib]
+
+                # Centres
+                cxa, cya = (x1a + x2a) / 2, (y1a + y2a) / 2
+                cxb, cyb = (x1b + x2b) / 2, (y1b + y2b) / 2
+
+                centre_a_in_b = x1b <= cxa <= x2b and y1b <= cya <= y2b
+                centre_b_in_a = x1a <= cxb <= x2a and y1a <= cyb <= y2a
+
+                if centre_a_in_b or centre_b_in_a:
+                    # Keep the higher-confidence box
+                    if confs[ia] >= confs[ib]:
+                        to_remove.add(ib)
+                    else:
+                        to_remove.add(ia)
+
+        if not to_remove:
+            return results
+
+        keep = [i for i in range(len(boxes)) if i not in to_remove]
+        keep_t = torch.tensor(keep, dtype=torch.long)
+        results.boxes = results.boxes[keep_t]
+        return results
+
     # ── main entry point ────────────────────────────────────────
     def process_frame(self, frame: np.ndarray, *,
                       do_faces: bool = True,
@@ -60,7 +120,11 @@ class PPEDetector:
         now = time.time()
 
         # 1) YOLO detection
-        results = self.model(frame)[0]
+        results = self.model(frame, iou=0.4, conf=0.45, verbose=False)[0]
+
+        # Remove duplicate Person boxes that NMS misses (low IoU but same person)
+        results = self._suppress_duplicate_persons(results)
+
         annotated = results.plot()
 
         # 2) Face identification (automatic)
