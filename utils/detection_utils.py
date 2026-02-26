@@ -42,44 +42,37 @@ class PPEDetector:
     def reload_faces(self):
         self._known_faces = database_utils.get_worker_face_encodings()
 
-    # ── duplicate-person suppression ────────────────────────────
-    def _suppress_duplicate_persons(self, results):
+    # ── duplicate box suppression (all classes) ─────────────────
+    def _suppress_duplicate_boxes(self, results):
         """
-        When YOLO fires multiple 'Person' boxes for the same person
-        (e.g. one wide background box + one tighter body box), NMS
-        won't catch them because their IoU is low.  Instead we check
-        *center containment*: if the centre of box A lies inside box B
-        (or vice-versa), they describe the same person – discard the
-        lower-confidence one.
+        NMS misses duplicate boxes when they don't overlap much
+        (e.g. one large background Person box + one tight body box,
+        or two NO-Safety-Vest boxes at different scales for the same
+        torso).  For every pair of boxes with the SAME class we check
+        *centre containment*: if the centre of either box falls inside
+        the other, they refer to the same object – keep only the one
+        with the higher confidence.
         """
         boxes = results.boxes
         if boxes is None or len(boxes) <= 1:
             return results
 
-        # Find the numeric id for class 'person'
-        person_cls_id = next(
-            (k for k, v in self.class_names.items()
-             if v.lower() == "person"), None
-        )
-        if person_cls_id is None:
-            return results
-
-        xyxy   = boxes.xyxy.cpu().numpy()          # (N, 4)  x1 y1 x2 y2
-        confs  = boxes.conf.cpu().numpy()           # (N,)
-        cls_ids = boxes.cls.cpu().numpy().astype(int)  # (N,)
-
-        person_idx = [i for i, c in enumerate(cls_ids) if c == person_cls_id]
-        if len(person_idx) <= 1:
-            return results
+        xyxy    = boxes.xyxy.cpu().numpy()               # (N,4)
+        confs   = boxes.conf.cpu().numpy()               # (N,)
+        cls_ids = boxes.cls.cpu().numpy().astype(int)    # (N,)
+        n       = len(cls_ids)
 
         to_remove: set = set()
-        for a in range(len(person_idx)):
-            for b in range(a + 1, len(person_idx)):
-                ia, ib = person_idx[a], person_idx[b]
-                x1a, y1a, x2a, y2a = xyxy[ia]
-                x1b, y1b, x2b, y2b = xyxy[ib]
+        for a in range(n):
+            for b in range(a + 1, n):
+                if cls_ids[a] != cls_ids[b]:
+                    continue                              # different class – skip
+                if a in to_remove or b in to_remove:
+                    continue                              # already eliminated
 
-                # Centres
+                x1a, y1a, x2a, y2a = xyxy[a]
+                x1b, y1b, x2b, y2b = xyxy[b]
+
                 cxa, cya = (x1a + x2a) / 2, (y1a + y2a) / 2
                 cxb, cyb = (x1b + x2b) / 2, (y1b + y2b) / 2
 
@@ -87,16 +80,15 @@ class PPEDetector:
                 centre_b_in_a = x1a <= cxb <= x2a and y1a <= cyb <= y2a
 
                 if centre_a_in_b or centre_b_in_a:
-                    # Keep the higher-confidence box
-                    if confs[ia] >= confs[ib]:
-                        to_remove.add(ib)
+                    if confs[a] >= confs[b]:
+                        to_remove.add(b)
                     else:
-                        to_remove.add(ia)
+                        to_remove.add(a)
 
         if not to_remove:
             return results
 
-        keep = [i for i in range(len(boxes)) if i not in to_remove]
+        keep   = [i for i in range(n) if i not in to_remove]
         keep_t = torch.tensor(keep, dtype=torch.long)
         results.boxes = results.boxes[keep_t]
         return results
@@ -122,8 +114,8 @@ class PPEDetector:
         # 1) YOLO detection
         results = self.model(frame, iou=0.4, conf=0.45, verbose=False)[0]
 
-        # Remove duplicate Person boxes that NMS misses (low IoU but same person)
-        results = self._suppress_duplicate_persons(results)
+        # Remove duplicate boxes that NMS misses (low IoU but same object)
+        results = self._suppress_duplicate_boxes(results)
 
         annotated = results.plot()
 
