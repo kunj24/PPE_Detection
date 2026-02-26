@@ -332,6 +332,25 @@ def page_register():
             st.markdown(f"**Dept:** {w['department']}")
             st.markdown(f"**Since:** {w['created_at']}")
 
+            st.markdown("---")
+            st.markdown("##### :red[Danger Zone]")
+            confirm = st.checkbox(f"I confirm I want to delete **{w['name']}** ({w['employee_id']})",
+                                  key=f"del_confirm_{w['employee_id']}")
+            if st.button("🗑️ Delete Worker", type="secondary",
+                         disabled=not confirm, key=f"del_btn_{w['employee_id']}"):
+                # Delete photo from disk
+                if w.get("image_path") and os.path.exists(w["image_path"]):
+                    os.remove(w["image_path"])
+                ok, msg = db.delete_worker(w["employee_id"])
+                if ok:
+                    st.success(f"Worker **{w['name']}** ({w['employee_id']}) deleted successfully.")
+                    # Refresh detector face cache
+                    if "detector" in st.session_state:
+                        st.session_state.detector.reload_faces()
+                    st.rerun()
+                else:
+                    st.error(msg)
+
 
 # ═══════════════════════════════════════════════════════════════
 #  PAGE 3 – DASHBOARD
