@@ -11,6 +11,7 @@ import time
 import cv2
 import numpy as np
 import torch
+import threading
 from datetime import datetime
 from typing import Dict, List, Tuple
 from ultralytics import YOLO
@@ -96,33 +97,35 @@ class PPEDetector:
     # ── main entry point ────────────────────────────────────────
     def process_frame(self, frame: np.ndarray, *,
                       do_faces: bool = True,
+                      cached_faces: List[Dict] = None,
                       manual_worker: Dict = None) -> Tuple[np.ndarray, dict]:
         """
         Run detection + face identification on a single BGR frame.
 
-        Face identification is automatic via OpenCV:
-        1. Detect faces in the frame
-        2. Compare against registered worker encodings
-        3. If match found, use that worker's info for violation logs
+        cached_faces: if provided, skip face detection and use this list
+                      (allows caller to run face detection at a lower rate
+                      while still drawing labels every frame).
 
-        manual_worker: optional override dict (employee_id, name, department)
-
-        Returns (annotated_frame, stats_dict).
+        Returns (annotated_frame, stats_dict, faces_list).
         """
         now = time.time()
 
         # 1) YOLO detection
         results = self.model(frame, iou=0.4, conf=0.45, verbose=False)[0]
-
-        # Remove duplicate boxes that NMS misses (low IoU but same object)
         results = self._suppress_duplicate_boxes(results)
-
         annotated = results.plot()
 
-        # 2) Face identification (automatic)
-        faces: List[Dict] = []
-        if do_faces and self._known_faces:
+        # 2) Face identification
+        if cached_faces is not None:
+            # Use caller-supplied cache – still draw labels every frame
+            faces = cached_faces
+        elif do_faces and self._known_faces:
             faces = face_utils.identify_faces(frame, self._known_faces)
+        else:
+            faces = []
+
+        # Always draw cached/fresh face labels on every frame
+        if faces:
             annotated = face_utils.draw_face_labels(annotated, faces)
 
         # 3) Walk detections and apply violation timing rule
@@ -169,20 +172,34 @@ class PPEDetector:
                 should_log = True
 
             if should_log:
-                # ── violation confirmed → save snapshot + DB row ──
+                # ── violation confirmed → everything goes to background thread ──
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
                 snap_name = f"violation_{eid}_{ts}.jpg"
                 snap_path = os.path.join("database", "violations", snap_name)
-                cv2.imwrite(snap_path, frame)
+                frame_copy = frame.copy()   # copy so the frame buffer isn't reused
 
-                severity = database_utils.calc_severity(eid)
-                database_utils.log_violation(
-                    employee_id=eid, name=wname, department=dept,
-                    violation_type=cls_name, confidence=conf,
-                    snapshot_path=snap_path,
-                    camera_location=self.camera,
-                    severity=severity,
-                )
+                # Disk write + Supabase upload + DB insert all in daemon thread
+                # → NEVER blocks the webcam frame loop
+                def _log_bg(eid=eid, wname=wname, dept=dept,
+                             cls_name=cls_name, conf=conf,
+                             snap_path=snap_path, camera=self.camera,
+                             frame_copy=frame_copy):
+                    try:
+                        os.makedirs(os.path.dirname(snap_path), exist_ok=True)
+                        cv2.imwrite(snap_path, frame_copy)
+                        severity = database_utils.calc_severity(eid)
+                        database_utils.log_violation(
+                            employee_id=eid, name=wname, department=dept,
+                            violation_type=cls_name, confidence=conf,
+                            snapshot_path=snap_path,
+                            camera_location=camera,
+                            severity=severity,
+                        )
+                    except Exception as e:
+                        print(f"[DB] background log error: {e}")
+
+                threading.Thread(target=_log_bg, daemon=True).start()
+
                 violations_logged += 1
                 if key in self._tracker:
                     del self._tracker[key]        # reset timer
@@ -196,7 +213,8 @@ class PPEDetector:
             detections=len(results.boxes),
             violations_in_frame=violations_in_frame,
             violations_logged=violations_logged,
-            workers_identified=len(faces),
+            workers_identified=len([f for f in faces if f['employee_id'] != 'Unknown']),
             pending_tracks=len(self._tracker),
+            faces=faces,          # return so caller can cache
         )
         return annotated, stats

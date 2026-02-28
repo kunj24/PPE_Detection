@@ -211,35 +211,96 @@ def page_detection():
 
 
 def _stream_video(source, det: PPEDetector, do_faces: bool):
-    """Shared helper - streams source frame-by-frame."""
+    """
+    Stream frames with smooth continuous face labelling.
+
+    Strategy:
+    - YOLO runs every frame (fast, ~30ms)
+    - Face detection runs in a background thread every 3rd frame
+      so it never blocks rendering
+    - Cached face list is drawn on EVERY frame → no flashing labels
+    """
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
         st.error("Cannot open video source"); return
 
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
     frame_ph = st.empty()
     stat_ph  = st.empty()
-    stop     = st.button("Stop Stream")
+    stop     = st.button("⏹ Stop Stream")
     n, t0    = 0, time.time()
+
+    # Shared face cache updated by background thread
+    import threading
+    _face_cache      = []
+    _face_cache_lock = threading.Lock()
+    _face_running    = threading.Event()   # prevents overlapping face threads
+
+    def _update_faces(frame_copy):
+        try:
+            new_faces = face_utils.identify_faces(frame_copy, det._known_faces)
+            with _face_cache_lock:
+                _face_cache.clear()
+                _face_cache.extend(new_faces)
+        except Exception:
+            pass
+        finally:
+            _face_running.clear()
+
+    last_stats = dict(detections=0, violations_in_frame=0,
+                      violations_logged=0, workers_identified=0,
+                      pending_tracks=0)
 
     while cap.isOpened() and not stop:
         ok, frame = cap.read()
         if not ok:
             st.warning("Stream ended."); break
-        annotated, stats = det.process_frame(frame, do_faces=do_faces)
-        frame_ph.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
-                       channels="RGB", use_container_width=True)
+
         n += 1
-        fps = n / max(time.time() - t0, 0.001)
-        with stat_ph.container():
-            a, b, c, d, e, f = st.columns(6)
-            a.metric("FPS", f"{fps:.1f}")
-            b.metric("Detections", stats["detections"])
-            c.metric("Violations", stats["violations_in_frame"])
-            d.metric("Workers", stats["workers_identified"])
-            e.metric("Logged", stats["violations_logged"])
-            f.metric("Pending", stats["pending_tracks"])
-        time.sleep(0.01)
+
+        # Every 3rd frame: kick off a background face-detection thread
+        if do_faces and det._known_faces and n % 3 == 0 and not _face_running.is_set():
+            _face_running.set()
+            threading.Thread(
+                target=_update_faces,
+                args=(frame.copy(),),
+                daemon=True
+            ).start()
+
+        # Read current cached faces (never blocks)
+        with _face_cache_lock:
+            current_faces = list(_face_cache)
+
+        # YOLO + draw cached face labels (no face detection here)
+        annotated, stats = det.process_frame(
+            frame,
+            do_faces=False,          # detection handled above
+            cached_faces=current_faces,
+        )
+        last_stats = stats
+
+        frame_ph.image(
+            cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
+            channels="RGB", use_container_width=True,
+        )
+
+        # Update metrics every 5 frames
+        if n % 5 == 0:
+            fps = n / max(time.time() - t0, 0.001)
+            with stat_ph.container():
+                a, b, c, d, e, f = st.columns(6)
+                a.metric("FPS",        f"{fps:.1f}")
+                b.metric("Detections", stats["detections"])
+                c.metric("Violations", stats["violations_in_frame"])
+                d.metric("Workers",    stats["workers_identified"])
+                e.metric("Logged",     stats["violations_logged"])
+                f.metric("Pending",    stats["pending_tracks"])
+
     cap.release()
+
 
 
 # ═══════════════════════════════════════════════════════════════
