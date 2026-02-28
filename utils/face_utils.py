@@ -134,6 +134,28 @@ def generate_encoding_from_array(bgr_array: np.ndarray) -> Tuple[Optional[bytes]
         return None, f"Error: {e}"
 
 
+def _suppress_duplicate_faces(rects: List[Tuple[int,int,int,int]]) -> List[Tuple[int,int,int,int]]:
+    """
+    Remove duplicate face rects where one rect's centre lies inside another.
+    Keeps the larger rect (bigger area = better detection).
+    """
+    if len(rects) <= 1:
+        return rects
+    rects_sorted = sorted(rects, key=lambda r: r[2]*r[3], reverse=True)
+    kept = []
+    for r in rects_sorted:
+        x, y, w, h = r
+        cx, cy = x + w // 2, y + h // 2
+        dominated = False
+        for kx, ky, kw, kh in kept:
+            if kx <= cx <= kx + kw and ky <= cy <= ky + kh:
+                dominated = True
+                break
+        if not dominated:
+            kept.append(r)
+    return kept
+
+
 def identify_faces(frame_bgr: np.ndarray,
                    known: Dict[str, tuple],
                    threshold: float = 0.55) -> List[Dict]:
@@ -154,6 +176,9 @@ def identify_faces(frame_bgr: np.ndarray,
         face_rects = _detect_faces_in_image(frame_bgr)
         if not face_rects:
             return []
+
+        # Remove duplicate rects for the same face
+        face_rects = _suppress_duplicate_faces(face_rects)
 
         results: List[Dict] = []
         for rect in face_rects:
