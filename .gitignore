@@ -14,3 +14,6 @@ venv/
 # OS files
 Thumbs.db
 .DS_Store
+
+# Environment secrets – NEVER commit this
+.env
