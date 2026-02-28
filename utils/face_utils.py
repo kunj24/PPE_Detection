@@ -30,7 +30,7 @@ def _detect_faces_in_image(bgr_image: np.ndarray) -> List[Tuple[int, int, int, i
     gray = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2GRAY)
     gray = cv2.equalizeHist(gray)
     faces = _face_cascade.detectMultiScale(
-        gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
+        gray, scaleFactor=1.1, minNeighbors=10, minSize=(100, 100)
     )
     return list(faces) if len(faces) > 0 else []
 
@@ -158,7 +158,7 @@ def _suppress_duplicate_faces(rects: List[Tuple[int,int,int,int]]) -> List[Tuple
 
 def identify_faces(frame_bgr: np.ndarray,
                    known: Dict[str, tuple],
-                   threshold: float = 0.55) -> List[Dict]:
+                   threshold: float = 0.42) -> List[Dict]:
     """
     Detect faces in frame, compare against known workers.
 
