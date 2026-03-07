@@ -28,9 +28,14 @@ _FACE_SIZE = (100, 100)
 def _detect_faces_in_image(bgr_image: np.ndarray) -> List[Tuple[int, int, int, int]]:
     """Detect faces and return list of (x, y, w, h) rects."""
     gray = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2GRAY)
-    gray = cv2.equalizeHist(gray)
+    # CLAHE gives much better local contrast than plain equalizeHist,
+    # especially under uneven / harsh lighting on a construction site.
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray = clahe.apply(gray)
+    # minNeighbors=7 balances detection rate vs false positives;
+    # minSize=(80,80) catches faces a bit further from the camera.
     faces = _face_cascade.detectMultiScale(
-        gray, scaleFactor=1.1, minNeighbors=10, minSize=(100, 100)
+        gray, scaleFactor=1.1, minNeighbors=7, minSize=(80, 80)
     )
     return list(faces) if len(faces) > 0 else []
 
@@ -210,15 +215,46 @@ def identify_faces(frame_bgr: np.ndarray,
 
 
 def draw_face_labels(frame: np.ndarray, faces: List[Dict]) -> np.ndarray:
-    """Draw coloured boxes + name labels on the frame."""
+    """Draw clean coloured boxes + name / ID labels on the frame."""
     for f in faces:
         top, right, bottom, left = f["box"]
-        known = f["employee_id"] != "Unknown"
-        colour = (0, 200, 0) if known else (0, 0, 255)
-        label = f'{f["name"]} ({f["employee_id"]})' if known else "Unknown"
+        known   = f["employee_id"] != "Unknown"
+        colour  = (0, 210, 0) if known else (0, 60, 220)   # green / red-ish
+        conf    = f.get("confidence", 0.0)
 
+        # Two-line label: name on top, ID + confidence below
+        if known:
+            line1 = f'{f["name"]}'
+            line2 = f'{f["employee_id"]}  {conf*100:.0f}%'
+        else:
+            line1 = "Unknown"
+            line2 = ""
+
+        font       = cv2.FONT_HERSHEY_DUPLEX
+        font_scale = 0.55
+        thickness  = 1
+
+        # Bounding box (thicker for visibility)
         cv2.rectangle(frame, (left, top), (right, bottom), colour, 2)
-        cv2.rectangle(frame, (left, bottom - 28), (right, bottom), colour, cv2.FILLED)
-        cv2.putText(frame, label, (left + 4, bottom - 6),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+
+        # Measure text to size the label background
+        (w1, h1), _ = cv2.getTextSize(line1, font, font_scale, thickness)
+        (w2, h2), _ = cv2.getTextSize(line2, font, font_scale - 0.1, thickness)
+        lbl_h  = h1 + (h2 + 6 if line2 else 0) + 12
+        lbl_w  = max(w1, w2) + 10
+
+        # Draw filled label background above the face box
+        lbl_top = max(0, top - lbl_h - 4)
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (left, lbl_top), (left + lbl_w, top), colour, cv2.FILLED)
+        cv2.addWeighted(overlay, 0.75, frame, 0.25, 0, frame)  # semi-transparent
+
+        # Draw text
+        cv2.putText(frame, line1,
+                    (left + 5, lbl_top + h1 + 4),
+                    font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+        if line2:
+            cv2.putText(frame, line2,
+                        (left + 5, lbl_top + h1 + h2 + 10),
+                        font, font_scale - 0.1, (220, 220, 220), thickness, cv2.LINE_AA)
     return frame
