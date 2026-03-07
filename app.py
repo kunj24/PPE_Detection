@@ -224,9 +224,14 @@ def _stream_video(source, det: PPEDetector, do_faces: bool):
     if not cap.isOpened():
         st.error("Cannot open video source"); return
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    # Request the best quality the camera supports
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))  # MJPEG = better quality at HD
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    cap.set(cv2.CAP_PROP_FPS, 30)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # minimal latency
+    cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)   # enable autofocus if supported
+    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # enable auto-exposure
 
     frame_ph = st.empty()
     stat_ph  = st.empty()
@@ -261,8 +266,9 @@ def _stream_video(source, det: PPEDetector, do_faces: bool):
 
         n += 1
 
-        # Every 3rd frame: kick off a background face-detection thread
-        if do_faces and det._known_faces and n % 3 == 0 and not _face_running.is_set():
+        # Kick off a new face-detection thread as soon as the previous one
+        # finishes – this gives truly continuous face labels
+        if do_faces and det._known_faces and not _face_running.is_set():
             _face_running.set()
             threading.Thread(
                 target=_update_faces,
