@@ -98,13 +98,15 @@ class PPEDetector:
     def process_frame(self, frame: np.ndarray, *,
                       do_faces: bool = True,
                       cached_faces: List[Dict] = None,
-                      manual_worker: Dict = None) -> Tuple[np.ndarray, dict]:
+                      manual_worker: Dict = None,
+                      prev_faces: List[Dict] = None) -> Tuple[np.ndarray, dict]:
         """
         Run detection + face identification on a single BGR frame.
 
         cached_faces: if provided, skip face detection and use this list
                       (allows caller to run face detection at a lower rate
                       while still drawing labels every frame).
+        prev_faces: previous frame's faces for spatial tracking
 
         Returns (annotated_frame, stats_dict, faces_list).
         """
@@ -120,7 +122,9 @@ class PPEDetector:
             # Use caller-supplied cache – still draw labels every frame
             faces = cached_faces
         elif do_faces and self._known_faces:
-            faces = face_utils.identify_faces(frame, self._known_faces)
+            faces = face_utils.identify_faces(
+                frame, self._known_faces, prev_faces=prev_faces
+            )
         else:
             faces = []
 
@@ -132,6 +136,33 @@ class PPEDetector:
         violations_in_frame = 0
         violations_logged = 0
         active_keys: set = set()
+
+        def _pick_face_for_box(x1: float, y1: float, x2: float, y2: float) -> Dict:
+            """Pick the best matching face for a given detection box."""
+            if not faces:
+                return {}
+            # Prefer faces whose centre lies inside the detection box
+            candidates = []
+            for f in faces:
+                top, right, bottom, left = f["box"]
+                cx = (left + right) / 2.0
+                cy = (top + bottom) / 2.0
+                if x1 <= cx <= x2 and y1 <= cy <= y2:
+                    candidates.append(f)
+            if not candidates:
+                # Fallback: choose closest face centre to box centre
+                bx, by = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+                def _dist2(f: Dict) -> float:
+                    top, right, bottom, left = f["box"]
+                    cx = (left + right) / 2.0
+                    cy = (top + bottom) / 2.0
+                    return (cx - bx) ** 2 + (cy - by) ** 2
+                candidates = sorted(faces, key=_dist2)[:3]
+
+            known = [f for f in candidates if f.get("employee_id") != "Unknown"]
+            if known:
+                return max(known, key=lambda f: f.get("confidence", 0.0))
+            return {}
 
         for box in results.boxes:
             cls_id = int(box.cls[0])
@@ -145,14 +176,13 @@ class PPEDetector:
             # Determine worker identity
             eid, wname, dept = "Unknown", "Unknown", "Unknown"
 
-            # Priority 1: auto face recognition match (best known face)
-            known_faces = [f for f in faces if f["employee_id"] != "Unknown"]
-            if known_faces:
-                # Use the face with highest confidence
-                best_face = max(known_faces, key=lambda f: f.get("confidence", 0))
-                eid   = best_face["employee_id"]
+            # Priority 1: face that best corresponds to THIS violation box
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+            best_face = _pick_face_for_box(x1, y1, x2, y2)
+            if best_face and best_face.get("employee_id") != "Unknown":
+                eid = best_face["employee_id"]
                 wname = best_face["name"]
-                dept  = best_face["department"]
+                dept = best_face["department"]
             # Priority 2: manual worker override (fallback)
             elif manual_worker and manual_worker.get("employee_id") != "Unknown":
                 eid   = manual_worker["employee_id"]

@@ -244,9 +244,12 @@ def _stream_video(source, det: PPEDetector, do_faces: bool):
     _face_cache_lock = threading.Lock()
     _face_running    = threading.Event()   # prevents overlapping face threads
 
-    def _update_faces(frame_copy):
+    def _update_faces(frame_copy, prev_faces_copy):
         try:
-            new_faces = face_utils.identify_faces(frame_copy, det._known_faces)
+            # Pass previous faces for spatial tracking to prevent name swapping
+            new_faces = face_utils.identify_faces(
+                frame_copy, det._known_faces, prev_faces=prev_faces_copy
+            )
             with _face_cache_lock:
                 _face_cache.clear()
                 _face_cache.extend(new_faces)
@@ -270,9 +273,12 @@ def _stream_video(source, det: PPEDetector, do_faces: bool):
         # finishes – this gives truly continuous face labels
         if do_faces and det._known_faces and not _face_running.is_set():
             _face_running.set()
+            # Copy current faces for spatial tracking
+            with _face_cache_lock:
+                prev_faces_snapshot = list(_face_cache)
             threading.Thread(
                 target=_update_faces,
-                args=(frame.copy(),),
+                args=(frame.copy(), prev_faces_snapshot),
                 daemon=True
             ).start()
 
