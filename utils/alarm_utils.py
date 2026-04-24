@@ -1,146 +1,152 @@
 """
-alarm_utils.py - Audio alarm system for PPE violations.
+alarm_utils.py - Browser-based voice alarm system for PPE violations.
 
-Provides:
-  - Generate system beep tones
-  - Play alarms with cooldown threshold (no spam)
-  - Configurable alarm duration and frequency
+Uses the browser's built-in Web Speech API (SpeechSynthesis) via
+Streamlit's st.components.v1.html() — no extra libraries needed,
+works on all platforms, produces real human-sounding speech.
+
+Usage:
+    from utils.alarm_utils import AlarmSystem
+    alarm = AlarmSystem(cooldown_secs=5.0)
+    alarm.play_alarm(violation_type="NO-Hardhat")   # speaks the warning
 """
 
 import time
 import threading
-import numpy as np
-import platform
-from typing import Optional
+import streamlit.components.v1 as components
+from typing import Dict, Optional
+
+
+# ── Violation → spoken message mapping ──────────────────────────
+VIOLATION_MESSAGES: Dict[str, str] = {
+    "NO-Hardhat":      "Warning! Worker is not wearing a helmet. Please wear your helmet immediately.",
+    "NO-Mask":         "Warning! Worker is not wearing a face mask. Please wear your mask immediately.",
+    "NO-Safety Vest":  "Warning! Worker is not wearing a safety vest. Please wear your safety vest immediately.",
+    "NO-Gloves":       "Warning! Worker is not wearing gloves. Please wear your gloves immediately.",
+    "NO-Boots":        "Warning! Worker is not wearing safety boots. Please wear your safety boots immediately.",
+    "NO-Goggles":      "Warning! Worker is not wearing safety goggles. Please wear your goggles immediately.",
+    "DEFAULT":         "Warning! A safety violation has been detected. Please wear all required PPE immediately.",
+}
+
+
+def speak_in_browser(message: str, rate: float = 0.9,
+                     pitch: float = 1.0, volume: float = 1.0):
+    """
+    Inject a JS snippet that uses the browser's SpeechSynthesis API
+    to speak the message in a real human voice.
+
+    Works in Chrome, Edge, Firefox, Safari — no Python install needed.
+    """
+    safe_msg = message.replace("'", "\\'")
+
+    js = f"""
+    <script>
+    (function() {{
+        window.speechSynthesis.cancel();
+        var msg = new SpeechSynthesisUtterance('{safe_msg}');
+        msg.rate   = {rate};
+        msg.pitch  = {pitch};
+        msg.volume = {volume};
+        msg.lang   = 'en-US';
+
+        // Pick the best available English voice
+        function speakNow() {{
+            var voices = window.speechSynthesis.getVoices();
+            var pick = voices.find(function(v) {{
+                return v.name.includes('Google US English') ||
+                       v.name.includes('Microsoft Zira')   ||
+                       v.name.includes('Microsoft David')  ||
+                       v.name.includes('Samantha')          ||
+                       v.name.includes('Karen')             ||
+                       v.name.includes('Daniel')            ||
+                       (v.lang === 'en-US' && v.localService);
+            }});
+            if (!pick) {{
+                pick = voices.find(function(v) {{ return v.lang.startsWith('en'); }});
+            }}
+            if (pick) msg.voice = pick;
+            window.speechSynthesis.speak(msg);
+        }}
+
+        // Voices may not be loaded yet on first call
+        if (window.speechSynthesis.getVoices().length > 0) {{
+            speakNow();
+        }} else {{
+            window.speechSynthesis.onvoiceschanged = speakNow;
+        }}
+    }})();
+    </script>
+    """
+    components.html(js, height=0)
 
 
 class AlarmSystem:
     """
-    Audio alarm with cooldown threshold to prevent alarm spam.
+    Voice alarm with per-violation-type cooldown.
 
-    When a violation is detected, plays a beep sound.
-    Subsequent alarms within the cooldown period are suppressed.
+    Uses speak_in_browser() → Web Speech API → real human voice.
+    No beeps. No extra Python packages. Works on any OS.
     """
 
     def __init__(self, cooldown_secs: float = 5.0):
-        """
-        Args:
-            cooldown_secs: Minimum seconds between consecutive alarms
-        """
         self.cooldown = cooldown_secs
-        self._last_alarm_time = 0.0
-        self._alarm_lock = threading.Lock()
-        self._stop_event = threading.Event()
+        # {violation_type: last_alarm_timestamp}
+        self._last_alarm: Dict[str, float] = {}
+        self._lock = threading.Lock()
 
-    def should_alarm(self) -> bool:
-        """Check if enough time has passed since last alarm."""
-        with self._alarm_lock:
-            now = time.time()
-            if now - self._last_alarm_time >= self.cooldown:
-                self._last_alarm_time = now
+    def _should_alarm(self, key: str) -> bool:
+        with self._lock:
+            now  = time.time()
+            last = self._last_alarm.get(key, 0.0)
+            if now - last >= self.cooldown:
+                self._last_alarm[key] = now
                 return True
             return False
 
     def play_alarm(self,
+                   violation_type: str = "DEFAULT",
+                   rate: float = 0.9,
+                   pitch: float = 1.0,
+                   volume: float = 1.0,
+                   # legacy params kept for backward-compat — ignored
                    frequency: int = 1000,
-                   duration_ms: int = 500,
-                   sample_rate: int = 22050) -> None:
+                   duration_ms: int = 500) -> None:
         """
-        Generate and play a beep tone asynchronously.
+        Speak the violation-specific warning through the browser.
 
         Args:
-            frequency: Hz (default 1000 = A6 note)
-            duration_ms: milliseconds
-            sample_rate: audio sample rate
+            violation_type : YOLO class name, e.g. "NO-Hardhat"
+            rate           : speech speed  (0.5 slow → 1.5 fast)
+            pitch          : voice pitch   (0.5 low  → 1.5 high)
+            volume         : loudness      (0.0 mute → 1.0 max)
         """
-        if not self.should_alarm():
-            return  # cooldown active, skip
+        if not self._should_alarm(violation_type):
+            return
+        message = VIOLATION_MESSAGES.get(violation_type,
+                                         VIOLATION_MESSAGES["DEFAULT"])
+        speak_in_browser(message, rate=rate, pitch=pitch, volume=volume)
 
-        # Run in daemon thread so it doesn't block
-        threading.Thread(
-            target=self._play_beep,
-            args=(frequency, duration_ms),
-            daemon=True
-        ).start()
+    def play_custom_message(self, message: str,
+                            cooldown_key: str = "custom",
+                            rate: float = 0.9) -> None:
+        """Speak any custom message with its own cooldown key."""
+        if not self._should_alarm(cooldown_key):
+            return
+        speak_in_browser(message, rate=rate)
 
-    def _play_beep(self, frequency: int, duration_ms: int) -> None:
-        """Play beep using platform-specific method."""
-        if platform.system() == "Windows":
-            self._play_with_winsound(frequency, duration_ms)
-        else:
-            self._play_with_pyaudio(frequency, duration_ms, 22050)
+    def reset_cooldown(self, violation_type: Optional[str] = None) -> None:
+        with self._lock:
+            if violation_type:
+                self._last_alarm.pop(violation_type, None)
+            else:
+                self._last_alarm.clear()
 
-    def _play_with_winsound(self, frequency: int, duration_ms: int) -> None:
-        """Windows-only beep using built-in winsound."""
-        try:
-            import winsound
-            winsound.Beep(frequency, duration_ms)
-        except Exception as e:
-            print(f"[ALARM] Beep failed: {e}")
+    @staticmethod
+    def get_message(violation_type: str) -> str:
+        return VIOLATION_MESSAGES.get(violation_type,
+                                      VIOLATION_MESSAGES["DEFAULT"])
 
-    def _play_with_pyaudio(self,
-                          frequency: int,
-                          duration_ms: int,
-                          sample_rate: int) -> None:
-        """Cross-platform beep using PyAudio (if available)."""
-        try:
-            import pyaudio
-            import wave
-            import tempfile
-            import os
-
-            # Generate sine wave
-            num_samples = int(sample_rate * duration_ms / 1000.0)
-            t = np.linspace(0, duration_ms / 1000.0, num_samples, False)
-            waveform = np.sin(2 * np.pi * frequency * t).astype(np.float32)
-
-            # Convert to 16-bit PCM
-            audio_data = (waveform * 32767).astype(np.int16)
-
-            # Write to temporary WAV file
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
-                tmp_path = tmp.name
-
-            try:
-                with wave.open(tmp_path, 'wb') as wav_file:
-                    wav_file.setnchannels(1)           # mono
-                    wav_file.setsampwidth(2)           # 16-bit
-                    wav_file.setframerate(sample_rate)
-                    wav_file.writeframes(audio_data.tobytes())
-
-                # Play the WAV file
-                with wave.open(tmp_path, 'rb') as wav_file:
-                    p = pyaudio.PyAudio()
-                    stream = p.open(
-                        format=p.get_format_from_width(wav_file.getsampwidth()),
-                        channels=wav_file.getnchannels(),
-                        rate=wav_file.getframerate(),
-                        output=True
-                    )
-
-                    data = wav_file.readframes(1024)
-                    while data and not self._stop_event.is_set():
-                        stream.write(data)
-                        data = wav_file.readframes(1024)
-
-                    stream.stop_stream()
-                    stream.close()
-                    p.terminate()
-            finally:
-                # Clean up temp file
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-
-        except ImportError:
-            print("[ALARM] PyAudio not available, skipping non-Windows audio")
-        except Exception as e:
-            print(f"[ALARM] PyAudio beep failed: {e}")
-
-    def stop(self) -> None:
-        """Signal any playing alarm to stop."""
-        self._stop_event.set()
-
-    def reset_cooldown(self) -> None:
-        """Reset cooldown timer (allows immediate next alarm)."""
-        with self._alarm_lock:
-            self._last_alarm_time = 0.0
+    @staticmethod
+    def add_message(violation_type: str, message: str) -> None:
+        """Register a custom spoken message for a new violation type."""
+        VIOLATION_MESSAGES[violation_type] = message
