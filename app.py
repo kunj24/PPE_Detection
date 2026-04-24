@@ -37,6 +37,7 @@ except ImportError:
 from utils import database_utils as db
 from utils import face_utils
 from utils.detection_utils import PPEDetector
+from utils.alarm_utils import AlarmSystem
 
 # --- Ensure DB tables exist ---
 db.init_database()
@@ -118,6 +119,15 @@ def page_detection():
                                help="Violations must persist this long before logging. Set to 0 for instant logging.")
         cam_loc = sc3.text_input("Camera location", "Main Camera")
 
+        # Alarm settings
+        sa1, sa2, sa3 = st.columns(3)
+        enable_alarm = sa1.checkbox("🔔 Enable Audio Alarm", value=True,
+                                    help="Play beep sound when violations detected")
+        alarm_cooldown = sa2.slider("Alarm cooldown (sec)", 1.0, 60.0, 5.0, 1.0,
+                                   help="Minimum seconds between consecutive alarms (prevents spam)")
+        alarm_freq = sa3.number_input("Tone frequency (Hz)", 500, 2000, 1000, 100,
+                                     help="Beep pitch in Hertz")
+
     # Auto face detection info
     all_workers = db.get_all_workers()
     known_faces = db.get_worker_face_encodings()  # {eid: (name, dept, encoding)}
@@ -139,7 +149,14 @@ def page_detection():
         st.session_state.detector.threshold = threshold
         st.session_state.detector.camera = cam_loc
 
+    # Initialize alarm system
+    if "alarm_system" not in st.session_state:
+        st.session_state.alarm_system = AlarmSystem(cooldown_secs=alarm_cooldown)
+    else:
+        st.session_state.alarm_system.cooldown = alarm_cooldown
+
     det: PPEDetector = st.session_state.detector
+    alarm: AlarmSystem = st.session_state.alarm_system
 
     source_type = st.radio(
         "Select Input Source",
@@ -156,6 +173,11 @@ def page_detection():
             frame = cv2.imdecode(
                 np.frombuffer(img.read(), np.uint8), cv2.IMREAD_COLOR)
             annotated, stats = det.process_frame(frame, do_faces=do_faces)
+
+            # Trigger alarm if violations logged
+            if enable_alarm and stats["violations_logged"] > 0:
+                alarm.play_alarm(frequency=int(alarm_freq))
+
             c1, c2 = st.columns([2, 1])
             c1.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
                      caption="Detection result", use_container_width=True)
@@ -175,7 +197,7 @@ def page_detection():
             with open(tmp, "wb") as fp:
                 fp.write(f.read())
             st.success("✅ Video uploaded – processing …")
-            _stream_video(tmp, det, do_faces)
+            _stream_video(tmp, det, do_faces, alarm, enable_alarm, int(alarm_freq))
 
     # ── Upload image ────────────────────────────────────────────
     elif source_type == "Upload Image":
@@ -186,6 +208,11 @@ def page_detection():
                 fp.write(f.read())
             frame = cv2.imread(tmp)
             annotated, stats = det.process_frame(frame, do_faces=do_faces)
+
+            # Trigger alarm if violations logged
+            if enable_alarm and stats["violations_logged"] > 0:
+                alarm.play_alarm(frequency=int(alarm_freq))
+
             st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
                      caption="PPE Detection", use_container_width=True)
             mc1, mc2, mc3, mc4 = st.columns(4)
@@ -201,16 +228,16 @@ def page_detection():
         url = st.text_input("RTSP URL",
                             placeholder="rtsp://user:pass@192.168.1.100:554/stream1")
         if url and st.button("📡 Start stream", type="primary"):
-            _stream_video(url, det, do_faces)
+            _stream_video(url, det, do_faces, alarm, enable_alarm, int(alarm_freq))
 
     # ── Local OpenCV webcam ─────────────────────────────────────
     elif source_type == "OpenCV Webcam (Local Only)":
         st.warning("⚠️ Only works when running Streamlit locally")
         if st.button("🎥 Start Webcam"):
-            _stream_video(0, det, do_faces)
+            _stream_video(0, det, do_faces, alarm, enable_alarm, int(alarm_freq))
 
 
-def _stream_video(source, det: PPEDetector, do_faces: bool):
+def _stream_video(source, det: PPEDetector, do_faces: bool, alarm: AlarmSystem = None, enable_alarm: bool = False, alarm_freq: int = 1000):
     """
     Stream frames with smooth continuous face labelling.
 
@@ -293,6 +320,10 @@ def _stream_video(source, det: PPEDetector, do_faces: bool):
             cached_faces=current_faces,
         )
         last_stats = stats
+
+        # Trigger alarm if violations logged
+        if enable_alarm and alarm and stats["violations_logged"] > 0:
+            alarm.play_alarm(frequency=int(alarm_freq))
 
         frame_ph.image(
             cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
