@@ -15,7 +15,7 @@ requests
 # Supabase backend
 supabase>=2.3.0
 python-dotenv>=1.0.0
-
+pyttsx3
 # Optional – install for face recognition (needs CMake + C++ compiler)
 # dlib
 # face-recognition
