@@ -22,9 +22,6 @@ VIOLATION_MESSAGES: Dict[str, str] = {
     "NO-Hardhat":      "Warning! Worker is not wearing a helmet. Please wear your helmet immediately.",
     "NO-Mask":         "Warning! Worker is not wearing a face mask. Please wear your mask immediately.",
     "NO-Safety Vest":  "Warning! Worker is not wearing a safety vest. Please wear your safety vest immediately.",
-    "NO-Gloves":       "Warning! Worker is not wearing gloves. Please wear your gloves immediately.",
-    "NO-Boots":        "Warning! Worker is not wearing safety boots. Please wear your safety boots immediately.",
-    "NO-Goggles":      "Warning! Worker is not wearing safety goggles. Please wear your goggles immediately.",
     "DEFAULT":         "Warning! A safety violation has been detected. Please wear all required PPE immediately.",
 }
 
