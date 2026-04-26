@@ -42,22 +42,106 @@ db.init_database()
 # ═══════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
-:root{--bg:#0f1724;--card:#0b1220;--accent:#00bcd4;
-      --text:#e6eef8;--danger:#ff6b6b;--success:#51cf66}
-.main{background:var(--bg)!important;color:var(--text)!important;
-      font-family:'Segoe UI',sans-serif}
-.stButton>button{background:linear-gradient(90deg,var(--accent),#0077b6)!important;
-      color:#02121a!important;border-radius:8px;padding:10px 18px;font-weight:700}
-.stSelectbox,.stTextInput,.stRadio>div{background:var(--card)!important;
-      color:var(--text)!important;border-radius:8px;padding:10px;
-      border:1px solid rgba(255,255,255,.04)}
-.alarm-row{display:flex;align-items:center;gap:10px;
-      background:rgba(255,107,107,.12);border-left:4px solid var(--danger);
-      padding:10px 14px;border-radius:6px;margin:4px 0;font-size:0.92rem}
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=DM+Sans:wght@400;500;700&display=swap');
+
+:root{
+  --bg:#07131f;
+  --bg2:#0a1e2f;
+  --card:#0f2a3e;
+  --card-soft:#143853;
+  --accent:#f2b134;
+  --accent-2:#2ec4b6;
+  --text:#eef6ff;
+  --muted:#a8c1d8;
+  --danger:#ff6b6b;
+  --success:#51cf66;
+}
+
+.stApp{
+  background:
+    radial-gradient(1200px 600px at 15% 0%, rgba(46,196,182,.22), transparent 60%),
+    radial-gradient(900px 450px at 85% 10%, rgba(242,177,52,.18), transparent 60%),
+    linear-gradient(145deg, var(--bg) 0%, var(--bg2) 100%);
+  color:var(--text)!important;
+}
+
+.main, .stMarkdown, .stText, p, div, span, label{
+  color:var(--text)!important;
+  font-family:'DM Sans',sans-serif;
+}
+
+h1,h2,h3,h4{
+  color:var(--text)!important;
+  font-family:'Space Grotesk',sans-serif;
+  letter-spacing:.2px;
+}
+
+.stButton>button{
+  background:linear-gradient(95deg,var(--accent),#ffd36e)!important;
+  color:#1d2530!important;
+  border:0!important;
+  border-radius:12px!important;
+  padding:10px 18px!important;
+  font-weight:700!important;
+  box-shadow:0 8px 20px rgba(242,177,52,.25);
+}
+.stButton>button:hover{
+  transform:translateY(-1px);
+  box-shadow:0 10px 22px rgba(242,177,52,.32);
+}
+
+div[data-testid="stMetric"]{
+  background:linear-gradient(140deg, rgba(20,56,83,.88), rgba(15,42,62,.88));
+  border:1px solid rgba(168,193,216,.18);
+  border-radius:14px;
+  padding:12px 10px;
+}
+
+section[data-testid="stSidebar"]{
+  background:linear-gradient(180deg,#06101a 0%, #0a1e2f 100%)!important;
+  border-right:1px solid rgba(168,193,216,.14);
+}
+
+.stSelectbox > div > div,
+.stTextInput > div > div,
+.stTextArea textarea,
+.stDateInput > div > div,
+.stNumberInput > div > div{
+  background:rgba(15,42,62,.95)!important;
+  color:var(--text)!important;
+  border:1px solid rgba(168,193,216,.2)!important;
+  border-radius:10px!important;
+}
+
+.stTabs [data-baseweb="tab-list"]{
+  gap:8px;
+}
+.stTabs [data-baseweb="tab"]{
+  background:rgba(15,42,62,.75);
+  border-radius:10px;
+  border:1px solid rgba(168,193,216,.14);
+}
+
+.alarm-row{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  background:rgba(255,107,107,.12);
+  border-left:4px solid var(--danger);
+  padding:10px 14px;
+  border-radius:8px;
+  margin:4px 0;
+  font-size:0.92rem;
+}
 .alarm-icon{font-size:1.3rem}
-section[data-testid="stSidebar"]{background:#071025!important}
-h1,h2,h3,h4{color:var(--text)!important}
-img{border-radius:8px}
+
+div[data-testid="stExpander"]{
+  border:1px solid rgba(168,193,216,.16);
+  border-radius:12px;
+  background:rgba(15,42,62,.72);
+}
+
+img{border-radius:10px}
 </style>
 """, unsafe_allow_html=True)
 
@@ -66,8 +150,17 @@ img{border-radius:8px}
 #  SIDEBAR
 # ═══════════════════════════════════════════════════════════════
 with st.sidebar:
-    if os.path.exists("home.jpeg"):
-        st.image("home.jpeg", use_container_width=True)
+    st.markdown("""
+    <div style="padding:14px 12px;border:1px solid rgba(168,193,216,.22);
+                border-radius:12px;background:rgba(15,42,62,.72);margin-bottom:14px">
+      <div style="font-family:'Space Grotesk',sans-serif;font-size:1.05rem;
+                  font-weight:700;color:#eef6ff;letter-spacing:.3px">
+        AI PPE SURVEILLANCE
+      </div>
+      <div style="font-size:.82rem;color:#a8c1d8;margin-top:2px">
+        Smart compliance monitoring
+      </div>
+    </div>""", unsafe_allow_html=True)
 
     st.markdown("""
     <div style="margin-top:20px">
