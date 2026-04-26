@@ -637,14 +637,19 @@ def page_logs():
 # ═══════════════════════════════════════════════════════════════
 def page_database():
     if _EXTRAS:
-        colored_header(label="🗄️ Database Viewer",
-                       description="View all database tables and entries",
+        colored_header(label="🗄️ Database Explorer",
+                       description="View all database tables from Supabase",
                        color_name="orange-70")
     else:
-        st.title("🗄️ Database Viewer")
+        st.title("🗄️ Database Explorer")
 
-    st.info("💡 Live view of your Supabase database")
-    tab1, tab2, tab3 = st.tabs(["👥 Workers","⚠️ Violations","📊 Stats"])
+    st.info("💡 Live view of your remote Supabase database")
+    
+    c_ref, _ = st.columns([2, 5])
+    if c_ref.button("🔄 Refresh Data", type="primary"):
+        st.rerun()
+
+    tab1, tab2, tab3 = st.tabs(["👥 Workers", "⚠️ Violations", "📊 Stats"])
 
     import sqlite3
 
@@ -661,23 +666,29 @@ def page_database():
 
     with tab2:
         fc1, fc2, fc3 = st.columns(3)
-        limit       = fc1.number_input("Last N rows", 10, 1000, 50, 10)
+        limit       = fc1.selectbox("Last N rows", [10, 50, 100, 200, 500, 1000, 2000, 5000], index=3)
         sort_order  = fc2.selectbox("Sort", ["Newest first","Oldest first"])
         filter_type = fc3.selectbox("Filter type",
                                     ["All","NO-Mask","NO-Hardhat","NO-Safety Vest"])
-        conn = sqlite3.connect("database.db")
-        q    = "SELECT * FROM violation_logs"
-        if filter_type != "All":
-            q += f" WHERE violation_type = '{filter_type}'"
-        q += " ORDER BY timestamp " + ("DESC" if "Newest" in sort_order else "ASC")
-        q += f" LIMIT {limit}"
-        df_v = pd.read_sql_query(q, conn); conn.close()
-        if df_v.empty:
-            st.warning("No violations found.")
-        else:
-            st.dataframe(df_v, use_container_width=True, hide_index=True)
-            st.download_button("📥 CSV", df_v.to_csv(index=False),
-                               "violations.csv", "text/csv")
+        
+        try:
+            client = db.get_client()
+            q = client.table("violation_logs").select("*")
+            if filter_type != "All":
+                q = q.eq("violation_type", filter_type)
+                
+            q = q.order("timestamp", desc=("Newest" in sort_order)).limit(limit)
+            res = q.execute()
+            
+            df_v = pd.DataFrame(res.data or [])
+            if df_v.empty:
+                st.warning("No violations found.")
+            else:
+                st.dataframe(df_v, use_container_width=True, hide_index=True)
+                st.download_button("📥 CSV", df_v.to_csv(index=False),
+                                   "violations.csv", "text/csv")
+        except Exception as e:
+            st.error(f"Error fetching from Supabase: {e}")
 
     with tab3:
         db_size = os.path.getsize("database.db") if os.path.exists("database.db") else 0
@@ -688,11 +699,11 @@ def page_database():
         st.markdown("#### 💻 Custom SQL")
         q_in = st.text_area("Query",
             "SELECT * FROM violation_logs ORDER BY timestamp DESC LIMIT 10;", height=80)
-        if st.button("▶️ Run"):
+        if st.button("▶️ Run SQL"):
             try:
                 conn = sqlite3.connect("database.db")
                 res  = pd.read_sql_query(q_in, conn); conn.close()
-                st.success(f"{len(res)} rows"); st.dataframe(res)
+                st.success(f"{len(res)} rows returned"); st.dataframe(res)
             except Exception as e:
                 st.error(f"Error: {e}")
 
