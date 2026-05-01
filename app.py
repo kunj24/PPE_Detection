@@ -155,7 +155,7 @@ with st.sidebar:
                 border-radius:12px;background:rgba(15,42,62,.72);margin-bottom:14px">
       <div style="font-family:'Space Grotesk',sans-serif;font-size:1.05rem;
                   font-weight:700;color:#eef6ff;letter-spacing:.3px">
-        safety gear detection
+        SAFETY GEAR DETECTION
       </div>
       <div style="font-size:.82rem;color:#a8c1d8;margin-top:2px">
         Smart compliance monitoring
