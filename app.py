@@ -17,7 +17,7 @@ import pandas as pd
 from datetime import datetime
 
 st.set_page_config(
-    page_title="AI PPE Surveillance",
+    page_title="safety gear detection",
     layout="wide",
     page_icon="👷",
     initial_sidebar_state="expanded",
@@ -155,7 +155,7 @@ with st.sidebar:
                 border-radius:12px;background:rgba(15,42,62,.72);margin-bottom:14px">
       <div style="font-family:'Space Grotesk',sans-serif;font-size:1.05rem;
                   font-weight:700;color:#eef6ff;letter-spacing:.3px">
-        AI PPE SURVEILLANCE
+        safety gear detection
       </div>
       <div style="font-size:.82rem;color:#a8c1d8;margin-top:2px">
         Smart compliance monitoring
@@ -223,11 +223,11 @@ def _show_alarm_banner(stats: dict) -> None:
 # ═══════════════════════════════════════════════════════════════
 def page_detection():
     if _EXTRAS:
-        colored_header(label="👷 AI CCTV Surveillance System",
+        colored_header(label="👷 safety gear detection",
                        description="Real-time PPE monitoring with browser voice alerts",
                        color_name="blue-70")
     else:
-        st.title("👷 AI CCTV Surveillance System")
+        st.title("👷 safety gear detection")
 
     # ── Settings ────────────────────────────────────────────────
     with st.expander("⚙️ Detection & Voice Alarm Settings", expanded=True):
