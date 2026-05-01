@@ -223,11 +223,11 @@ def _show_alarm_banner(stats: dict) -> None:
 # ═══════════════════════════════════════════════════════════════
 def page_detection():
     if _EXTRAS:
-        colored_header(label="👷 safety gear detection",
+        colored_header(label="👷 safety gear detection System",
                        description="Real-time PPE monitoring with browser voice alerts",
                        color_name="blue-70")
     else:
-        st.title("👷 safety gear detection")
+        st.title("👷 safety gear detection System")
 
     # ── Settings ────────────────────────────────────────────────
     with st.expander("⚙️ Detection & Voice Alarm Settings", expanded=True):
